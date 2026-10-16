@@ -1,0 +1,16 @@
+[workspace]
+resolver = "3"
+members = [
+    "protocol",
+    "host/jupiter2ctl",
+    "firmware/hello",
+]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "MIT"
+
+[workspace.dependencies]
+exec-modernise-v4-protocol = { path = "protocol" }
+

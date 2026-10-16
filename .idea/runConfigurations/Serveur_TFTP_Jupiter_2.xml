@@ -1,0 +1,9 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Serveur TFTP Jupiter 2" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
+    <option name="command" value="run -p jupiter2ctl -- tftp-serve --bind 0.0.0.0:69 --root tftp-root" />
+    <option name="workingDirectory" value="$PROJECT_DIR$" />
+    <option name="emulateTerminal" value="true" />
+    <method v="2" />
+  </configuration>
+</component>
+

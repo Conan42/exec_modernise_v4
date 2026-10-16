@@ -1,0 +1,6 @@
+/target/
+/tftp-root/*
+!/tftp-root/.gitkeep
+.idea/workspace.xml
+.idea/shelf/
+

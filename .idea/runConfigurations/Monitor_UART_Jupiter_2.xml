@@ -1,0 +1,9 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Monitor UART Jupiter 2" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
+    <option name="command" value="run -p jupiter2ctl -- monitor --serial /dev/ttyUSB0" />
+    <option name="workingDirectory" value="$PROJECT_DIR$" />
+    <option name="emulateTerminal" value="true" />
+    <method v="2" />
+  </configuration>
+</component>
+
