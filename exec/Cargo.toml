@@ -1,0 +1,10 @@
+[package]
+name = "exec-v4"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+filesystem-v4 = { path = "../filesystem" }

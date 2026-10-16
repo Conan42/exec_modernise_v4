@@ -14,6 +14,10 @@ host/jupiter2ctl ── UART DEBUG ── Milk-V Jupiter 2
 protocol (no_std)
        │
 firmware/hello ─── image de test, après validation du profil de boot
+
+exec-v4 ─── scheduler SMP / contextes / IPI / SBI / MMU
+    │
+    └── filesystem-v4 (validation ELF/MFFS)
 ```
 
 La couche hôte configure l'UART en 8N1 sans contrôle de flux, comme la liaison
@@ -34,4 +38,3 @@ retransmissions bornées.
 
 Le backend matériel ne sera marqué opérationnel qu'après validation des
 registres, DMA, caches, IRQ et fences sur la carte.
-

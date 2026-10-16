@@ -10,6 +10,8 @@ Présent :
 - `host/jupiter2ctl` avec moniteur UART `115200 8N1` sans contrôle de flux ;
 - serveur TFTP `octet`, RRQ, blocs de 512 octets, ACK et retransmissions ;
 - `protocol`, crate `no_std` pour les futures trames de commande ;
+- `exec-v4` et `filesystem-v4` repris de la V3, avec scheduler multi-hart,
+  états SMP, IPI, SBI, contextes et contrats MMU ;
 - image `firmware/hello`, volontairement activée seulement avec `--features
   board` tant que le linker et le profil de boot Jupiter 2 ne sont pas fixés ;
 - configurations RustRover pour l'information, l'UART et le TFTP.
@@ -29,4 +31,3 @@ d'accès déjà utilisée pour la liaison de la carte.
    V4 ;
 4. seulement après cette preuve, porter les contrats UI/Vulkan de TacticalGlobe
    et les contrats `RenderPlan`/surfaces de V3.
-

@@ -10,6 +10,8 @@ Le premier jalon est volontairement limité à la communication avec la carte :
 - UART DEBUG : `/dev/ttyUSB0`, `115200 8N1`, sans contrôle de flux ;
 - TFTP : serveur de fichiers pour les requêtes RRQ du bootloader ;
 - protocole partagé `no_std` pour les futures commandes binaires ;
+- cœur `exec-v4` repris de V3 avec ordonnanceur par hart, SMP, IPI, SBI,
+  contextes et gestion mémoire portable ;
 - image firmware minimale séparée, activée seulement lorsque le profil de boot
   Jupiter 2 et son adresse de chargement sont confirmés.
 
