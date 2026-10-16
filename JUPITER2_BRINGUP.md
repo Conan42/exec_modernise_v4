@@ -1,14 +1,20 @@
 # Bring-up Milk-V Jupiter 2
 
-## Liaison actuelle
+## Liaison actuelle — niveau logique 1,8 V
+
+> **Ne pas utiliser 3,3 V. La liaison UART DEBUG de la Jupiter 2 est en
+> logique 1,8 V.** Cette précision concerne le câblage électrique, pas
+> seulement la configuration du terminal.
 
 Le script historique `/home/mich/uart_connect.sh` utilise `/dev/ttyUSB0` à
 `115200` bauds, `8N1`, sans contrôle de flux. V4 reprend exactement ces
 paramètres dans `jupiter2ctl monitor`.
 
-La liaison USB/UART DEBUG utilise un niveau logique de 1,8 V ; GND est commun
-et TXD/RXD sont croisés. La documentation Jupiter 1 en 3,3 V ne doit pas être
-réutilisée pour ce câblage.
+La liaison USB/UART DEBUG utilise donc un **niveau logique de 1,8 V** : GND est
+commun, TXD de l'adaptateur va vers RXD de la carte et RXD de l'adaptateur va
+vers TXD de la carte. Utiliser un adaptateur USB-UART compatible 1,8 V, ou un
+convertisseur de niveau adapté. La documentation Jupiter 1 en 3,3 V ne doit
+pas être réutilisée pour ce câblage.
 
 ## TFTP
 
@@ -38,4 +44,3 @@ Les adresses documentées du K3 ne sont pas encore transformées en driver V4 :
 Ces adresses seules ne suffisent pas à initialiser le matériel. Les clocks,
 resets, power-domains, IOMMU, DMA et IRQ doivent être portés depuis le device
 tree et validés sur la carte.
-

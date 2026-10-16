@@ -20,8 +20,10 @@ exec-v4 ─── scheduler SMP / contextes / IPI / SBI / MMU
     └── filesystem-v4 (validation ELF/MFFS)
 ```
 
-La couche hôte configure l'UART en 8N1 sans contrôle de flux, comme la liaison
-DEBUG déjà validée. Le serveur TFTP sert uniquement des noms relatifs sous sa
+La liaison électrique UART DEBUG est en **logique 1,8 V**. GND est commun et
+TXD/RXD sont croisés ; un adaptateur 3,3 V ne doit pas être branché directement.
+La couche hôte configure ensuite l'UART en 8N1 sans contrôle de flux, comme la
+liaison DEBUG déjà validée. Le serveur TFTP sert uniquement des noms relatifs sous sa
 racine et implémente le transfert `octet` par blocs de 512 octets avec ACK et
 retransmissions bornées.
 

@@ -7,7 +7,8 @@ validation.
 
 Le premier jalon est volontairement limité à la communication avec la carte :
 
-- UART DEBUG : `/dev/ttyUSB0`, `115200 8N1`, sans contrôle de flux ;
+- UART DEBUG : `/dev/ttyUSB0`, **logique 1,8 V**, `115200 8N1`, sans contrôle
+  de flux ;
 - TFTP : serveur de fichiers pour les requêtes RRQ du bootloader ;
 - protocole partagé `no_std` pour les futures commandes binaires ;
 - cœur `exec-v4` repris de V3 avec ordonnanceur par hart, SMP, IPI, SBI,
@@ -19,6 +20,11 @@ Le projet est indépendant du dépôt TacticalGlobe et ne modifie pas son pipeli
 de relief. Il ne déclare pas encore le backend RGX/Vulkan ou V2D/DPU matériel :
 les documents V3 indiquent que ces blocs nécessitent d'abord une séquence
 clocks, reset, power-domain, IOMMU, DMA et IRQ validée sur la carte.
+
+> **Attention électrique — UART DEBUG Jupiter 2 : 1,8 V.** GND doit être
+> commun et TXD/RXD croisés. Ne pas brancher cette liaison avec un adaptateur
+> 3,3 V : la documentation de la Jupiter 1 en 3,3 V ne s'applique pas à cette
+> connexion.
 
 ## Ouvrir dans RustRover
 

@@ -5,6 +5,9 @@
 Le projet `/home/mich/RustProjects/exec_modernise_v4` est créé comme workspace
 Rust indépendant. RustRover peut l'ouvrir directement avec son `Cargo.toml`.
 
+La contrainte électrique de la console DEBUG est fixée à **1,8 V logique**.
+Elle ne doit pas être confondue avec la liaison 3,3 V de la Jupiter 1.
+
 Présent :
 
 - `host/jupiter2ctl` avec moniteur UART `115200 8N1` sans contrôle de flux ;

@@ -47,7 +47,7 @@ fn main() -> Result<()> {
         CommandLine::TftpServe { bind, root } => tftp_serve(&bind, &root),
         CommandLine::Info => {
             println!("Exec Modernisé V4 — bring-up Milk-V Jupiter 2");
-            println!("UART DEBUG : /dev/ttyUSB0, 115200 8N1, sans contrôle de flux");
+            println!("UART DEBUG : /dev/ttyUSB0, logique 1,8 V, 115200 8N1, sans contrôle de flux");
             println!("TFTP       : le bootloader doit envoyer une requête RRQ au serveur");
             println!(
                 "Protocole  : version {}",
