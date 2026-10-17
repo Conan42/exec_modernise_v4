@@ -35,7 +35,9 @@ Libraries
 ├── exec.library
 ├── dos.library
 ├── intuition.library
+├── layers.library
 ├── graphics.library
+├── gadtools.library
 └── autres services
 
 Devices
@@ -54,6 +56,12 @@ Exec
 `dos.library` fournit la façade des fichiers, répertoires, volumes, processus
 DOS et flux standard ; elle s'appuie sur Exec et sur le handler du volume. Elle
 ne remplace ni Exec ni le Device de stockage.
+
+`layers.library` organise les couches d'affichage : ordre avant/arrière,
+clipping, zones endommagées et composition des fenêtres. `gadtools.library`
+fournit des gadgets réutilisables comme les boutons, cases, chaînes et listes ;
+elle s'appuie sur Intuition pour les fenêtres et sur Graphics pour le rendu.
+Ces Libraries gardent la politique d'interface au-dessus d'Exec et des Devices.
 
 Workbench est une application système au-dessus d’Exec, DOS, Intuition et
 Graphics. Il n’est pas nécessaire pour lancer une application ou ouvrir un
