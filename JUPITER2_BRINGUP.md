@@ -833,3 +833,8 @@ et expose le framebuffer au noyau. L'écran, l'adaptateur USB-C/HDMI et la
 liaison physique sont validés par ce test. Le point restant pour V4 est le
 flux bare-metal après l'initialisation `SCANOUT_STAGE_OK`; `SPLASH_OK` reste
 réservé à l'observation visuelle du splash V4.
+
+La validation visuelle a ensuite été confirmée : l'écran affiche effectivement
+la page de connexion Bianbu. Le chemin complet Jupiter 2 → USB-C → HDMI → HP
+Compaq LA2006x fonctionne donc avec le pilote Linux. Cette observation permet
+d'isoler le défaut restant au pipeline vidéo bare-metal V4.
