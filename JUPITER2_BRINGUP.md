@@ -813,3 +813,23 @@ point reste à surveiller lors d'un prochain redémarrage.
 Le lien DisplayPort et le pipeline de scanout sont donc initialisés par le
 firmware. `SPLASH_OK` reste à déclarer après confirmation visuelle du splash
 sur le moniteur HP Compaq LA2006x.
+
+## 17 octobre 2026 — validation du chemin écran avec Bianbu
+
+Après reset, U-Boot a démarré Bianbu depuis l'UFS avec `run ufs_boot`. Le
+journal Linux confirme que le chemin physique utilisé par la Jupiter 2 est
+fonctionnel avec l'adaptateur USB-C/HDMI :
+
+```text
+Product: USB Type-C Digital AV Adapter
+spacemit-inno-dp-drv cac88000.dp1: DP: Training successful for R:1620000 L:2.
+spacemit-inno-dp-drv cac88000.dp1: MSA: 1600x900, Rate:1620000 kHz, Lanes:2, BPP:24, TU:64.0
+spacemit-drm-drv c0440000.display-subsystem-dp1: [drm] fb0: spacemitdrmfb frame buffer device
+RISCV login:
+```
+
+Bianbu initialise donc le DP1 à `1600x900`, avec deux voies à `1,62 Gb/s`,
+et expose le framebuffer au noyau. L'écran, l'adaptateur USB-C/HDMI et la
+liaison physique sont validés par ce test. Le point restant pour V4 est le
+flux bare-metal après l'initialisation `SCANOUT_STAGE_OK`; `SPLASH_OK` reste
+réservé à l'observation visuelle du splash V4.
