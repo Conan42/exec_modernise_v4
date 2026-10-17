@@ -505,7 +505,7 @@ flowchart TB
     SBI -->|hart_start / SSIP| H2
     H0 -. IPI reschedule .-> H1
     H1 -. migration contrôlée .-> Sched
-    H2 -. sfence.vma / arrêt .-> SBI
+    H2 -. sfence vma et arrêt .-> SBI
 ```
 
 Le modèle portable V2/V4 couvre les règles de priorité, d'affinité, de
