@@ -719,3 +719,62 @@ La commande `go 0x140000000` a exécuté le firmware jusqu'aux marqueurs
 `LINK_TRAIN_OK`, `DP_MSA_STAGE_OK`, `SCANOUT_STAGE_OK` et `MMIO_PROBE_OK`.
 Le chemin bare-metal est donc exécuté avec succès ; `SPLASH_OK` attend encore
 la confirmation visuelle sur le HP Compaq LA2006x.
+
+## 17 octobre 2026 — correction du minutage Saturn après « pas de signal »
+
+La dernière exécution atteint encore `LINK_TRAIN_OK`, `DP_MSA_STAGE_OK` et
+`SCANOUT_STAGE_OK`, mais le HP Compaq LA2006x reste sans signal. La comparaison
+avec le pilote SpacemiT Linux a révélé une erreur de packing dans `TMG0+0x0C`.
+Ce registre contient `split_overlap[9:0]` et `HFP[27:16]`; `HBP` est dans
+`TMG0+0x10`.
+
+Le firmware écrivait auparavant `HFP | (HBP << 16)`, soit `0x00600018` pour
+1600×900. Cela plaçait `24` dans `split_overlap` et `96` dans le champ `HFP`,
+alors que `TMG0+0x10` portait déjà `HBP=96`. Le timing produit par Saturn ne
+correspondait donc pas au timing MSA annoncé au transmetteur DP.
+
+Le correctif écrit maintenant uniquement `HFP << 16` :
+
+```text
+TMG0+0x0C_RB=0x00180000
+TMG0+0x10_RB=0x00600050
+```
+
+Le reset vidéo DP est aussi aligné sur le pilote Linux : les quatre bits du
+champ `VIDEO_RESET[3:0]` sont assertés puis relâchés ensemble. Le binaire
+corrigé a été compilé et copié dans `tftp-root/bonjour-jupiter2.bin`; il n'est
+pas encore validé sur la Jupiter 2.
+
+Après reset et arrêt à `V4_BOOT_HALTED`, le prochain essai est :
+
+```text
+setenv ipaddr 192.168.1.132
+setenv serverip 192.168.1.131
+setenv netmask 255.255.255.0
+ping 192.168.1.131
+tftpboot 0x102000000 splashscreen-1600x900.bgra
+tftpboot 0x140000000 bonjour-jupiter2.bin
+go 0x140000000
+```
+
+La validation attendue est d'abord la nouvelle valeur `TMG0+0x0C_RB`, puis la
+confirmation visuelle du splash. `SPLASH_OK` reste réservé à cette observation
+sur le moniteur.
+
+Le premier lancement automatique de cette séquence n'a pas atteint le
+firmware : après le chargement réseau, U-Boot a affiché plusieurs `T` puis
+`Retry count exceeded` sur le transfert de `bonjour-jupiter2.bin`. Le service
+TFTP présent sur UDP 69 ne répondait plus aux RRQ de la carte, alors qu'une
+RRQ locale fonctionne. Le service doit être redémarré avant le prochain essai :
+
+```bash
+sudo fuser -k 69/udp
+sudo target/debug/jupiter2ctl tftp-serve \
+  --bind 0.0.0.0:69 \
+  --root /home/mich/RustProjects/exec_modernise_v4/tftp-root
+```
+
+Le mot de passe sudo doit être saisi directement dans le terminal du PC. Cette
+étape réseau est distincte du correctif `TMG0+0x0C` ; aucune nouvelle
+conclusion vidéo ne doit être tirée tant que le binaire corrigé n'a pas produit
+sa trace UART.

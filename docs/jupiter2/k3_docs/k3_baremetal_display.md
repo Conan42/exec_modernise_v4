@@ -272,3 +272,20 @@ Le chemin physique de test est USB-C avec adaptateur HDMI. DP1 est le
 transmetteur DisplayPort source de la Jupiter ; l'adaptateur convertit le
 DisplayPort Alt Mode en HDMI. Une trace DPCD ou de link training positive ne
 suffit donc pas, à elle seule, à certifier le signal HDMI au moniteur.
+
+## Correction du champ HFP Saturn
+
+La comparaison avec `drivers/gpu/drm/spacemit/dpu/dpu_saturn_hee.c` du noyau
+K3 a identifié une erreur dans le premier portage du timing. Le registre
+`TMG0+0x0C` contient `split_overlap` dans les bits `9:0` et `HFP` dans les bits
+`27:16`. `HBP` est dans le registre suivant, `TMG0+0x10`.
+
+Pour 1600×900 DMT, l'ancienne écriture `0x00600018` encodait donc un
+chevauchement de 24 pixels et un HFP de 96 pixels. Le correctif écrit
+`HFP << 16`, donc `0x00180000`, tandis que `TMG0+0x10` conserve
+`0x00600050` pour `HBP=96` et `HSYNC=80`. Le reset vidéo DP a aussi été aligné
+sur le pilote constructeur en utilisant le champ complet `VIDEO_RESET[3:0]`.
+
+Cette correction est compilée dans le prochain `bonjour-jupiter2.bin`. Elle
+doit encore être exécutée sur la Jupiter 2 et vérifiée visuellement avant de
+conclure sur le signal HDMI.

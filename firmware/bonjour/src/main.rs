@@ -75,6 +75,12 @@ const DP_VIDEO_MSA3: usize = 0x22C;
 const DP_VIDEO_HBLANK_INTERVAL: usize = 0x230;
 const DP_VIDEO_COLORBAR_CFG: usize = 0x238;
 
+// Inno DP video reset covers the four stream state machines in bits 3:0.
+// The Linux driver asserts the complete field during transmitter init.
+const DP_VIDEO_RESET_HIGH: u32 = 3;
+const DP_VIDEO_RESET_LOW: u32 = 0;
+const DP_STREAM_ENC_EN: u32 = 18;
+
 const DP_CORE_PLL_LOCK: u32 = 1 << 7;
 const DP_PIXEL_PLL_LOCK: u32 = 1 << 7;
 // Bianbu/Linux selects the minimum link that exactly carries 1600x900@60:
@@ -196,6 +202,9 @@ const DPU1_PIXEL_CLOCK_KHZ: u32 = 108_000;
 
 const TMG_CTRL_HSP_VSP: u32 = (1 << 7) | (1 << 8);
 const TMG_OUTFMT_RGB888: u32 = 2 << 12;
+// TMG0+0x0C contains split_overlap in bits 9:0 and HFP in bits 27:16.
+// HBP is in TMG0+0x10, so it must not be packed into this register.
+const TMG_HFP_REGISTER_VALUE: u32 = DPU1_MODE_HFP << 16;
 
 global_asm!(
     r#"
@@ -559,7 +568,7 @@ extern "C" fn rust_main() -> ! {
     let timing_hfp_hbp_ok = uart.write_mmio_value(
         "TMG0+0x0C_RB=",
         DPU1_BASE + DPU1_TMG0 + TMG_HFP_HBP,
-        DPU1_MODE_HFP | (DPU1_MODE_HBP << 16),
+        TMG_HFP_REGISTER_VALUE,
     );
     let timing_hsync_hbp_ok = uart.write_mmio_value(
         "TMG0+0x10_RB=",
@@ -975,13 +984,23 @@ extern "C" fn rust_main() -> ! {
         dp_ok &= uart.write_field(DP1_BASE + DP_SOFT_RESET, 30, 30, 1);
         dp_ok &= uart.write_field(DP1_BASE + DP_SOFT_RESET, 29, 29, 1);
         dp_ok &= uart.write_field(DP1_BASE + DP_SOFT_RESET, 27, 27, 1);
-        dp_ok &= uart.write_field(DP1_BASE + DP_SOFT_RESET, 0, 0, 1);
+        dp_ok &= uart.write_field(
+            DP1_BASE + DP_SOFT_RESET,
+            DP_VIDEO_RESET_HIGH,
+            DP_VIDEO_RESET_LOW,
+            0xF,
+        );
         uart.delay(100_000);
         dp_ok &= uart.write_field(DP1_BASE + DP_SOFT_RESET, 31, 31, 0);
         dp_ok &= uart.write_field(DP1_BASE + DP_SOFT_RESET, 30, 30, 0);
         dp_ok &= uart.write_field(DP1_BASE + DP_SOFT_RESET, 29, 29, 0);
         dp_ok &= uart.write_field(DP1_BASE + DP_SOFT_RESET, 27, 27, 0);
-        dp_ok &= uart.write_field(DP1_BASE + DP_SOFT_RESET, 0, 0, 0);
+        dp_ok &= uart.write_field(
+            DP1_BASE + DP_SOFT_RESET,
+            DP_VIDEO_RESET_HIGH,
+            DP_VIDEO_RESET_LOW,
+            0,
+        );
         uart.delay(50_000);
 
         // Core PLL: Linux's RBR setup at 1.62 Gb/s.
@@ -1277,6 +1296,14 @@ extern "C" fn rust_main() -> ! {
                 // the failure is below Saturn/RDMA and is in the DP stream,
                 // clocking, or physical output path.
                 msa_ok &= uart.write_field(DP1_BASE + DP_VIDEO_COLORBAR_CFG, 0, 0, 1);
+                // Keep the external DP path in the normal DP stream mode.
+                // STREAM_ENC_EN is only used by the eDP branch in Linux.
+                msa_ok &= uart.write_field(
+                    DP1_BASE + DP_VIDEO_VSAMPLE,
+                    DP_STREAM_ENC_EN,
+                    DP_STREAM_ENC_EN,
+                    0,
+                );
                 msa_ok &= uart.write_field(DP1_BASE + DP_VIDEO_VSAMPLE, 28, 28, 1);
                 uart.write_mmio("DP1+0x200_VIDEO_RB=", DP1_BASE + DP_VIDEO_VSAMPLE);
                 uart.write_mmio("DP1+0x238_COLORBAR_RB=", DP1_BASE + DP_VIDEO_COLORBAR_CFG);
