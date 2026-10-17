@@ -5,13 +5,15 @@ members = [
     "filesystem",
     "exec",
     "host/jupiter2ctl",
-    "firmware/hello",
+    "firmware/bonjour",
 ]
 
 [workspace.package]
 edition = "2024"
 version = "0.1.0"
 license = "MIT"
+readme = "README.md"
+description = "Bring-up Rust et contrats portables d'Exec Modernisé sur Milk-V Jupiter 2"
 
 [workspace.dependencies]
 exec-modernise-v4-protocol = { path = "protocol" }

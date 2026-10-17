@@ -1,0 +1,9 @@
+*.bgra binary
+*.jpg binary
+*.png binary
+*.spv binary
+*.ttf binary
+*.webp binary
+
+# Documents importés du dossier de référence K3.
+docs/jupiter2/** whitespace=-trailing-space

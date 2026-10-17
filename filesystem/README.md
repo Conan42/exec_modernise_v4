@@ -16,6 +16,19 @@ réserve et remplit ces pages est volontairement porté par le crate Exec.
 Le crate est membre du workspace sous le nom `filesystem-v4` ; sa validation
 est exécutée par `cargo test --workspace`.
 
+## Rapport avec le bring-up Jupiter 2
+
+Le premier bring-up matériel a validé la console U-Boot, la mémoire LPDDR5 et
+le stockage UFS de la SpacemiT K3 Pico ITX. Il n'a pas encore chargé une image
+V4 : `filesystem-v4` reste donc une validation portable exécutée sur l'hôte et
+dans les tests du workspace. Aucun chemin ne relie encore cette crate au
+chargeur U-Boot, au TFTP ou à un volume UFS réel.
+
+L'intégration carte attend la validation préalable de l'adresse de chargement,
+du linker et du format d'image `firmware/bonjour`. La progression et les
+commandes de restauration de l'environnement de boot sont documentées dans
+[`../JUPITER2_BRINGUP.md`](../JUPITER2_BRINGUP.md).
+
 L'outil hôte `mffs-pack` valide un ELF APP RISC-V puis construit une image
 MFFS V1 à entrée unique. `build-uilab.sh` l'utilise pour produire
 `UILab.app.mffs` ; cet outil n'est pas embarqué dans le kernel.

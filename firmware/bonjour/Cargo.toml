@@ -1,0 +1,20 @@
+[package]
+name = "exec-modernise-v4-bonjour"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[[bin]]
+name = "exec-modernise-v4-bonjour"
+path = "src/main.rs"
+test = false
+bench = false
+required-features = ["board"]
+
+[features]
+default = []
+board = []
+
+[dependencies]
+exec-modernise-v4-protocol.workspace = true

@@ -1,6 +1,9 @@
 /target/
 /tftp-root/*
 !/tftp-root/.gitkeep
+.DS_Store
+*.log
+.env
+.env.*
 .idea/workspace.xml
 .idea/shelf/
-
