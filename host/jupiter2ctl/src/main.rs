@@ -112,7 +112,9 @@ fn tftp_serve(bind: &str, root: &Path) -> Result<()> {
                         request.filename,
                         data.len()
                     );
-                    serve_file(&socket, peer, &data)?;
+                    if let Err(error) = serve_file(&socket, peer, &data) {
+                        eprintln!("transfert TFTP interrompu pour {peer}: {error:#}");
+                    }
                 }
                 Err(error) => send_error(&socket, peer, 1, &error.to_string())?,
             }
@@ -192,7 +194,11 @@ fn send_with_ack(socket: &UdpSocket, peer: SocketAddr, packet: &[u8], block: u16
                 }
             }
             Ok(_) => {}
-            Err(error) if error.kind() == io::ErrorKind::TimedOut => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                ) => {}
             Err(error) => return Err(error).context("réception ACK TFTP"),
         }
     }
