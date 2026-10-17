@@ -1,5 +1,7 @@
 # AmigaOS — histoire et philosophie d’un système qui aurait dû être le meilleur
 
+**Langues :** **Français** · [English](AMIGAOS_HISTORY_EN.md)
+
 Ce chapitre présente pourquoi AmigaOS possédait, dès 1985, une avance
 architecturale remarquable, et pourquoi cette avance n’a pas suffi à en faire
 le système dominant.
