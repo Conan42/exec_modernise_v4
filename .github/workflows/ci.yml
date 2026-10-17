@@ -19,6 +19,9 @@ jobs:
         with:
           components: rustfmt
 
+      - name: Install host dependencies
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y pkg-config libudev-dev
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
