@@ -48,4 +48,5 @@ déclarer `SPLASH_OK`.
 
 Les nouveaux diagrammes d'architecture utilisent Mermaid intégré dans GitHub.
 Les assets importés doivent être accompagnés de leur provenance et de leur
-licence dans [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+licence dans [`THIRD_PARTY_NOTICES_FR.md`](THIRD_PARTY_NOTICES_FR.md) ou sa
+version anglaise [`THIRD_PARTY_NOTICES_EN.md`](THIRD_PARTY_NOTICES_EN.md).

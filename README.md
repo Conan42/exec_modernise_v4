@@ -19,7 +19,8 @@ validation.
 - [`JUPITER2_BRINGUP.md`](JUPITER2_BRINGUP.md) — procédure et traces matérielles ;
 - [`PROGRESS.md`](PROGRESS.md) — journal des jalons et décisions ;
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — règles de contribution et validation ;
-- [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) — provenance et licences des assets.
+- [`THIRD_PARTY_NOTICES_FR.md`](THIRD_PARTY_NOTICES_FR.md) — provenance et licences des assets (français) ;
+- [`THIRD_PARTY_NOTICES_EN.md`](THIRD_PARTY_NOTICES_EN.md) — third-party assets and licence notices (English).
 - [`docs/OPEN_SOURCE.md`](docs/OPEN_SOURCE.md) — checklist de publication GitHub.
 
 ## État actuel
@@ -128,6 +129,7 @@ L'état du travail et les preuves de validation sont suivis dans
 
 Le code Rust du workspace est publié sous MIT. Les fichiers importés dans
 `assets/` conservent leurs licences propres, détaillées dans
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). Avant toute redistribution
+[`THIRD_PARTY_NOTICES_FR.md`](THIRD_PARTY_NOTICES_FR.md) et
+[`THIRD_PARTY_NOTICES_EN.md`](THIRD_PARTY_NOTICES_EN.md). Avant toute redistribution
 d'une image complète, vérifier la provenance des images et des shaders ajoutés
 au dépôt.

@@ -9,7 +9,8 @@ egui/Vulkan de TacticalGlobe. Il n'est pas une image firmware et ne doit pas
 être copié dans `tftp-root/` pour le boot de la Jupiter 2.
 
 Les licences et la provenance des polices, images et shaders sont suivies dans
-[`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md). Toute nouvelle
+[`../THIRD_PARTY_NOTICES_FR.md`](../THIRD_PARTY_NOTICES_FR.md) et sa version
+anglaise [`../THIRD_PARTY_NOTICES_EN.md`](../THIRD_PARTY_NOTICES_EN.md). Toute nouvelle
 ressource doit y être ajoutée avant une release publique.
 
 ## État

@@ -17,7 +17,8 @@ du dépôt et la licence des assets dont la provenance vient de V3.
 ## Avant le premier push
 
 1. Vérifier les droits de redistribution des images, shaders et documents
-   matériels décrits dans [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
+   matériels décrits dans [`../THIRD_PARTY_NOTICES_FR.md`](../THIRD_PARTY_NOTICES_FR.md)
+   ou [`../THIRD_PARTY_NOTICES_EN.md`](../THIRD_PARTY_NOTICES_EN.md).
 2. Relire les traces de [`../JUPITER2_BRINGUP.md`](../JUPITER2_BRINGUP.md) et
    retirer les paramètres de laboratoire qui ne doivent pas être publics.
 3. Choisir le nom du dépôt et créer un dépôt GitHub vide, sans README généré.
