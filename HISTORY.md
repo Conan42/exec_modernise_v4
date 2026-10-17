@@ -11,6 +11,11 @@ Pour le contexte historique d'AmigaOS, voir
 travail documentaire de V2 sur l'Amiga 1000, Exec, Intuition, Graphics,
 Workbench, les Devices et l'héritage retenu pour Exec Modernisé.
 
+L'état des lieux comparatif des systèmes, repris de V2, est conservé dans
+[`docs/ETAT_DES_LIEUX_OS.md`](docs/ETAT_DES_LIEUX_OS.md). Il explique les
+choix de conception face à Linux, macOS, Android, iOS, Windows et AmigaOS ; il
+reste un document historique, tandis que `PROGRESS.md` décrit l'état courant.
+
 ## Chronologie du projet
 
 ### Héritage AmigaOS — années 1980 et 1990

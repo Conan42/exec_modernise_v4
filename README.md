@@ -14,6 +14,7 @@ validation.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — composants, flux et diagrammes Mermaid ;
 - [`HISTORY.md`](HISTORY.md) — histoire V1 → V4 et archive des sessions ;
 - [`docs/AMIGAOS_HISTORY.md`](docs/AMIGAOS_HISTORY.md) — héritage historique AmigaOS ;
+- [`docs/ETAT_DES_LIEUX_OS.md`](docs/ETAT_DES_LIEUX_OS.md) — comparaison historique des systèmes et choix V2 ;
 - [`JUPITER2_BRINGUP.md`](JUPITER2_BRINGUP.md) — procédure et traces matérielles ;
 - [`PROGRESS.md`](PROGRESS.md) — journal des jalons et décisions ;
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — règles de contribution et validation ;
