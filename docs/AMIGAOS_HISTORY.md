@@ -33,6 +33,7 @@ Applications
 
 Libraries
 ├── exec.library
+├── dos.library
 ├── intuition.library
 ├── graphics.library
 └── autres services
@@ -50,8 +51,13 @@ Exec
 └── IPC par messages
 ```
 
-Workbench est une application système au-dessus d’Exec, Intuition et Graphics.
-Il n’est pas nécessaire pour lancer une application ou ouvrir un Screen privé.
+`dos.library` fournit la façade des fichiers, répertoires, volumes, processus
+DOS et flux standard ; elle s'appuie sur Exec et sur le handler du volume. Elle
+ne remplace ni Exec ni le Device de stockage.
+
+Workbench est une application système au-dessus d’Exec, DOS, Intuition et
+Graphics. Il n’est pas nécessaire pour lancer une application ou ouvrir un
+Screen privé.
 
 ## 3. Le clin d’œil Atari TOS et la MAO
 
