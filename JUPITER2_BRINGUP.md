@@ -778,3 +778,38 @@ Le mot de passe sudo doit être saisi directement dans le terminal du PC. Cette
 étape réseau est distincte du correctif `TMG0+0x0C` ; aucune nouvelle
 conclusion vidéo ne doit être tirée tant que le binaire corrigé n'a pas produit
 sa trace UART.
+
+## Essai firmware corrigé — 17 octobre 2026
+
+Le serveur TFTP corrigé a été lancé sur le PC Ryzen 5 et la Jupiter 2 a
+transféré les deux fichiers depuis `192.168.1.131` :
+
+```text
+bonjour-jupiter2.bin       30861 octets
+splashscreen-1600x900.bgra 5760000 octets
+```
+
+Le firmware a ensuite été lancé avec `go 0x140000000`. La trace UART confirme
+le nouveau packing du timing horizontal :
+
+```text
+TMG0+0x0C_RB=0x00180000
+TMG0+0x10_RB=0x00600050
+TIMING_STAGE_OK
+RDMA_STAGE_OK
+DMMU_STAGE_OK
+CMDLIST_STAGE_OK
+AUX_STAGE_OK
+LINK_TRAIN_OK
+DP_MSA_STAGE_OK
+SCANOUT_STAGE_OK
+MMIO_PROBE_OK
+```
+
+La sonde intermédiaire `AUX_AFTER_PLL` a signalé `AUX_AFTER_PLL_FAIL`, puis la
+séquence AUX complète a réussi (`AUX_STAGE_OK`) et le lien a été entraîné. Ce
+point reste à surveiller lors d'un prochain redémarrage.
+
+Le lien DisplayPort et le pipeline de scanout sont donc initialisés par le
+firmware. `SPLASH_OK` reste à déclarer après confirmation visuelle du splash
+sur le moniteur HP Compaq LA2006x.
