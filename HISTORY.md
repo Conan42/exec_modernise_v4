@@ -53,6 +53,14 @@ chapitre AmigaOS a explicité les choix d'héritage : préserver Exec, les
 Libraries et les Devices, puis remplacer les dépendances implicites par des
 contrats testables.
 
+Le chapitre historique précise également la place de `dos.library`, le rôle
+des handlers de volume et la différence entre le FFS historique, ExecFS et le
+catalogue MFFS V1 utilisé par le chargement ELF de V4.
+
+Il documente maintenant aussi l'interruption verticale VERTB, les cadences PAL
+50 Hz et NTSC 59,94/60 Hz, ainsi que leur équivalent moderne VSync/scanout
+DisplayPort pour la Jupiter 2.
+
 Le bring-up QEMU a servi de banc reproductible avant l'arrivée du matériel
 Jupiter 2. Les premiers diagrammes et règles de propriété ont aussi fixé la
 séparation entre application, Library, Device et backend GPU.
