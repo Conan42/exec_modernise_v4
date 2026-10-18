@@ -955,3 +955,25 @@ cmdlist HEE. La confirmation visuelle est maintenant le contrôle utile ; si le
 moniteur reste noir, le prochain relevé portera sur l'événement de reload de la
 cmdlist et sur les registres d'état du compositeur, plutôt que sur les seuls
 readbacks CPU.
+
+## 18 octobre 2026 — mire DP interne visible, chaîne physique validée
+
+Après plusieurs essais Saturn et fond TMG restés noirs, le firmware a été
+reconstruit avec `DP_COLORBAR_TEST=true`. Cette variante bypass les pixels
+DPU/TMG/Saturn et active uniquement la mire interne du transmetteur DP.
+
+Après reset, transfert TFTP et exécution, l'UART confirme :
+
+```text
+DP1+0x238_COLORBAR_RB=0x00000001
+LINK_TRAIN_OK
+DP_MSA_STAGE_OK
+SCANOUT_STAGE_OK
+DP_COLORBAR_BLUE_HOLD
+```
+
+La mire bleue est effectivement visible sur le HP Compaq LA2006x. La chaîne
+Jupiter 2 → DP1 → adaptateur USB-C/HDMI → DVI → moniteur est donc validée sans
+ambiguïté. Le problème restant est exclusivement dans la production ou le
+routage des pixels par DPU1/TMG/Saturn ; le transmetteur DP, le link training,
+le mode 1600×900@60 et l'adaptateur ne sont plus les premières pistes.

@@ -47,7 +47,9 @@ const SATURN_SOLID_CYCLE_TEST: bool = false;
 const SATURN_SOLID_DIRECT_TEST: bool = false;
 // Set this to true only for the known-good blue reference. It bypasses Saturn
 // entirely; false selects the normal Saturn/RDMA stream.
-const DP_COLORBAR_TEST: bool = false;
+// Reference-only test: bypass the DPU pixel stream and generate the
+// transmitter's internal blue colorbar.
+const DP_COLORBAR_TEST: bool = true;
 // Diagnostic after the first visible gray frame: disable layer00 and make the
 // TMG generate a pure red background. This isolates the output color path
 // from Saturn's layer and command-list data.
@@ -187,6 +189,10 @@ const DPU1_RDMA0: usize = 0x1000;
 const DPU1_INT: usize = 0x700;
 const DPU_ONLINE_IRQ_MASK: usize = DPU1_INT + 0x0C;
 const DPU_ONLINE_IRQ_STATUS: usize = DPU1_INT + 0x30;
+const DPU_ONLINE_IRQ_ENTER_PENDING: usize = DPU1_INT + 0x34;
+const DPU_ONLINE_IRQ_RAW: usize = DPU1_INT + 0x58;
+const DPU_ONLINE_IRQ_RAW_ENTER_PENDING: usize = DPU1_INT + 0x5C;
+const DPU_ONLINE_IRQ_RAW_PADDR: usize = DPU1_INT + 0x60;
 // RDMA_PATH_REG index 43..52, from the constructor Saturn register map.
 // These are read-only diagnostics and do not alter the active scanout.
 const RDMA_DBG_IRQ_RAW: usize = DPU1_RDMA0 + 43 * 4;
@@ -203,6 +209,10 @@ const DPU1_CTRL_TOP: usize = 0x3C0;
 // dpu_ctl_top_reg_10[dev_id] contains cmdlist_cmps_other_en and
 // cmdlist_cmps_top_en.  For composer 1 this is register 10, hence +0x28.
 const DPU1_CMDLIST_CMPS: usize = DPU1_CTRL_TOP + 0x28;
+const DPU1_CMDLIST_CFG_READY: usize = DPU1_CTRL_TOP + 0x34;
+const DPU1_CMDLIST_REUSE_ACTIVE: usize = DPU1_CTRL_TOP + 0x40;
+const DPU1_CMDLIST_SW_EVENT_BASE: usize = DPU1_CTRL_TOP + 0x58;
+const DPU1_CMDLIST_START_CMPS_Y_BASE: usize = DPU1_CTRL_TOP + 0x90;
 const DPU1_SCENE1: usize = 0x340;
 const DPU1_SCENE1_CMD_UPDATE: usize = DPU1_SCENE1 + 0x04;
 const DPU1_SCENE1_VIDEO_MODE: usize = DPU1_SCENE1 + 0x0C;
@@ -250,6 +260,8 @@ const CMDLIST_COMPOSER_CHANNEL: usize = 4 + 2 + 1;
 const CMDLIST_START_ADDRL: usize = CMDLIST_BASE + CMDLIST_COMPOSER_CHANNEL * 4;
 const CMDLIST_START_ADDRH: usize = CMDLIST_BASE + 0x40 + CMDLIST_COMPOSER_CHANNEL * 4;
 const CMDLIST_Y_FIRST: usize = CMDLIST_BASE + 0xC0 + CMDLIST_COMPOSER_CHANNEL * 4;
+const CMDLIST_DBG0: usize = CMDLIST_BASE + 0x1D8 + CMDLIST_COMPOSER_CHANNEL * 4;
+const CMDLIST_DBG_STATUS: usize = CMDLIST_BASE + 0x1F8;
 // saturn_get_cl_cfg_rdy_addr() returns DPU_CTRL_BASE_ADDR + 0x34.  This is
 // dpu_ctl_top_reg_13, not a register in the cmdlist window: DPU1+0x534 is
 // reserved in cmdlist_top.h.  The final cmdlist row must therefore target
@@ -1729,6 +1741,20 @@ extern "C" fn rust_main() -> ! {
                 uart.write_mmio("DPU1+0x350_POST_RB=", DPU1_BASE + DPU_SCENE_CTL_SW_START);
                 uart.write_mmio("DPU1+0x3E8_POST_RB=", DPU1_BASE + DPU1_CMDLIST_CMPS);
                 uart.write_mmio("DPU1+0x3F4_POST_RB=", CMDLIST_CFG_READY_ADDR);
+                uart.write_mmio(
+                    "DPU1+0x400_REUSE_ACTIVE_RB=",
+                    DPU1_BASE + DPU1_CMDLIST_REUSE_ACTIVE,
+                );
+                uart.write_mmio(
+                    "DPU1+0x434_SW_EVENT_RB=",
+                    DPU1_BASE + DPU1_CMDLIST_SW_EVENT_BASE + CMDLIST_COMPOSER_CHANNEL * 4,
+                );
+                uart.write_mmio(
+                    "DPU1+0x46C_START_CMPS_Y_RB=",
+                    DPU1_BASE + DPU1_CMDLIST_START_CMPS_Y_BASE + CMDLIST_COMPOSER_CHANNEL * 4,
+                );
+                uart.write_mmio("CMDLIST7+0x1F4_DBG_RB=", DPU1_BASE + CMDLIST_DBG0);
+                uart.write_mmio("CMDLIST+0x6F8_STATUS_RB=", DPU1_BASE + CMDLIST_DBG_STATUS);
                 uart.write_mmio("CMP1+0x00_POST_RB=", DPU1_BASE + DPU1_COMPOSER1);
                 uart.write_mmio("CMP1+0x08_POST_RB=", DPU1_BASE + CMP_BG_R);
                 uart.write_mmio("CMP1+0x0C_POST_RB=", DPU1_BASE + CMP_BG_G);
@@ -1767,6 +1793,34 @@ extern "C" fn rust_main() -> ! {
                     );
                     uart.write_mmio("DPU1+0x70C_IRQ_MASK=", DPU1_BASE + DPU_ONLINE_IRQ_MASK);
                     uart.write_mmio("DPU1+0x730_IRQ_STATUS=", DPU1_BASE + DPU_ONLINE_IRQ_STATUS);
+                    uart.write_mmio(
+                        "DPU1+0x734_IRQ_ENTER_PENDING=",
+                        DPU1_BASE + DPU_ONLINE_IRQ_ENTER_PENDING,
+                    );
+                    uart.write_mmio("DPU1+0x758_IRQ_RAW=", DPU1_BASE + DPU_ONLINE_IRQ_RAW);
+                    uart.write_mmio(
+                        "DPU1+0x75C_IRQ_RAW_ENTER_PENDING=",
+                        DPU1_BASE + DPU_ONLINE_IRQ_RAW_ENTER_PENDING,
+                    );
+                    uart.write_mmio(
+                        "DPU1+0x760_IRQ_RAW_PADDR=",
+                        DPU1_BASE + DPU_ONLINE_IRQ_RAW_PADDR,
+                    );
+                    uart.write_mmio("DPU1+0x3F4_CFG_READY=", DPU1_BASE + DPU1_CMDLIST_CFG_READY);
+                    uart.write_mmio(
+                        "DPU1+0x400_REUSE_ACTIVE=",
+                        DPU1_BASE + DPU1_CMDLIST_REUSE_ACTIVE,
+                    );
+                    uart.write_mmio(
+                        "DPU1+0x434_SW_EVENT=",
+                        DPU1_BASE + DPU1_CMDLIST_SW_EVENT_BASE + CMDLIST_COMPOSER_CHANNEL * 4,
+                    );
+                    uart.write_mmio(
+                        "DPU1+0x46C_START_CMPS_Y=",
+                        DPU1_BASE + DPU1_CMDLIST_START_CMPS_Y_BASE + CMDLIST_COMPOSER_CHANNEL * 4,
+                    );
+                    uart.write_mmio("CMDLIST7+0x1F4_DBG=", DPU1_BASE + CMDLIST_DBG0);
+                    uart.write_mmio("CMDLIST+0x6F8_STATUS=", DPU1_BASE + CMDLIST_DBG_STATUS);
                     uart.write_mmio("RDMA0+0xAC_DBG_RAW=", DPU1_BASE + RDMA_DBG_IRQ_RAW);
                     uart.write_mmio("RDMA0+0xB0_DBG_MASK=", DPU1_BASE + RDMA_DBG_IRQ_MASK);
                     uart.write_mmio("RDMA0+0xB4_DBG_STATUS=", DPU1_BASE + RDMA_DBG_IRQ_STATUS);

@@ -1715,3 +1715,24 @@ La couche bleue est désormais envoyée par le chemin HEE utilisé par le pilote
 Linux. Si l'écran reste noir malgré cette variante, la prochaine sonde devra
 lire l'état de reload/consommation de la cmdlist et du compositeur, car les
 readbacks des registres d'écriture sont alors insuffisants.
+
+## 18 octobre 2026 — victoire : mire DP bleue visible
+
+Pour isoler définitivement le matériel de sortie, `DP_COLORBAR_TEST` a été
+activé. Cette variante ne dépend ni des pixels Saturn, ni du RDMA, ni de la
+DMMU, ni de la cmdlist : le transmetteur DP génère lui-même la mire bleue.
+
+Après reset, TFTP et exécution, la trace a donné :
+
+```text
+DP1+0x238_COLORBAR_RB=0x00000001
+LINK_TRAIN_OK
+DP_MSA_STAGE_OK
+SCANOUT_STAGE_OK
+DP_COLORBAR_BLUE_HOLD
+```
+
+La mire bleue est visible sur le HP Compaq LA2006x. Le chemin physique
+Jupiter 2 → DP1 → adaptateur USB-C/HDMI → DVI → écran est validé. Le défaut
+est maintenant localisé au flux de pixels DPU1/TMG/Saturn ; les essais suivants
+pourront désactiver la mire DP sans remettre en cause la liaison physique.
