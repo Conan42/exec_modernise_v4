@@ -1567,3 +1567,76 @@ La panne restante est donc localisée au chemin de composition DPU1/Saturn
 (`CMP1`, scène, cmdlist, RDMA/DMMU ou routage vers TMG). Le splash BGRA n'est
 pas validé et `SPLASH_OK` reste volontairement absent. La session est arrêtée
 à ce point ; aucune nouvelle commande ni aucun nouveau reset n'est requis.
+
+## 18 octobre 2026 — essai instrumenté bloqué par HPD absent
+
+Une sonde en lecture seule a été ajoutée après `SW_START` pour distinguer les
+valeurs simplement écrites des valeurs conservées par le compositeur actif.
+Le binaire de `36461` octets a été transféré avec succès par TFTP et lancé à
+`0x140000000`. Avant la partie DP, la trace confirme :
+
+```text
+RDMA0+0x3C_RB=0x00001900
+TBU0+0x28_RB=0x0000057F
+RDMA0+0x24_VA_RB=0x10000000
+RDMA0+0x28_VA_RB=0x00000000
+DMMU_STAGE_OK
+CMDLIST_STAGE_OK
+DPU_SCENE_STAGE_OK
+DPU_LAYER_STAGE_OK
+```
+
+Le firmware n'a pas atteint le nouveau bloc `DPU_POST_COMMIT`, car le HPD
+n'était pas présent au moment du reset :
+
+```text
+dp cannot get HPD signal
+AUX_AFTER_DPU_FAIL
+AUX_AFTER_PLL_FAIL
+DPCD_REV=0x00000000
+DPCD_RATE=0x00000000
+DPCD_LANES=0x00000000
+AUX_STAGE_READBACK_FAIL
+```
+
+Cet essai est classé **interrompu par absence de HPD**, et non comme un nouvel
+échec du compositeur. L'écran doit être relié à la Jupiter 2 et placé sur la
+bonne entrée avant le prochain reset ; la sonde post-commit pourra ensuite
+fournir les valeurs effectives de `CMP1`, de la scène DPU1 et de la cmdlist.
+
+## 18 octobre 2026 — vrai test Saturn bleu après reset
+
+Le diagnostic `CMP_BACKGROUND_TEST` était encore actif lors de l'essai du
+fond rouge. Cette option désactive `layer00`, ce qui explique le readback
+`CMP1+0x38_ACTIVE_RB=0x00000000` de cette trace. Elle a été désactivée pour
+tester réellement la couche pleine Saturn.
+
+Après un reset effectivement visible dans l'UART, le binaire de `36405`
+octets a été transféré par TFTP à `0x140000000`. La mémoire a été vérifiée
+avant l'exécution :
+
+```text
+140000000: 17 91 01 00 13 01 01 00 97 10 00 00 e7 80 c0 06
+Bytes transferred = 36405 (8e35 hex)
+```
+
+La trace complète atteint le commit post-scène avec la couche bleue active :
+
+```text
+CMP1+0x30_SOLID_B_RB=0x000003FF
+CMP1+0x34_SOLID_A_RB=0x000100FF
+CMP1+0x38_ACTIVE_RB=0x0000FF09
+TMG0+0x00_ACTIVE_RB=0x00000181
+DPU1+0x348_POST_RB=0x00000000
+DPU1+0x350_POST_RB=0x00000000
+DPU_POST_COMMIT_END
+DP_MSA_STAGE_OK
+SCANOUT_STAGE_OK
+SATURN_SOLID_BLUE_HOLD
+```
+
+`CFG_READY` et `SW_START` retombent à zéro après consommation par le matériel,
+tandis que les valeurs effectives de `CMP1` restent présentes. Le lien DP est
+validé (`LINK_TRAIN_OK`) et aucune IRQ d'erreur DPU/RDMA n'est signalée. Cette
+exécution constitue le test Saturn bleu correct ; il reste à confirmer la
+couleur observée sur le HP Compaq LA2006x.

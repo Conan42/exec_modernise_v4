@@ -48,7 +48,7 @@ const DP_COLORBAR_TEST: bool = false;
 // TMG generate a pure red background. This isolates the output color path
 // from Saturn's layer and command-list data.
 const TMG_BACKGROUND_TEST: bool = false;
-const CMP_BACKGROUND_TEST: bool = true;
+const CMP_BACKGROUND_TEST: bool = false;
 
 // The Pico-ITX device tree routes the active external output through DP1/eDP1
 // and DPU1. The initial probe is read-only. The controlled APMU step below
@@ -1692,6 +1692,38 @@ extern "C" fn rust_main() -> ! {
                 uart.write_str("LINK_POST_STATUS=");
                 uart.write_hex_u32(u32::from(post_status[0]));
                 uart.write_str("\n");
+
+                // Read the effective state after the command-list commit and
+                // the scene start. Readbacks from the staging phase alone do
+                // not prove that the composer accepted the values on the
+                // active frame. Keep this probe read-only so it can be used
+                // with the solid-color test as well as with RDMA.
+                uart.write_str("DPU_POST_COMMIT_BEGIN\n");
+                uart.write_mmio("DPU1+0x340_POST_RB=", DPU1_BASE + DPU1_SCENE_CTL);
+                uart.write_mmio(
+                    "DPU1+0x348_POST_RB=",
+                    DPU1_BASE + DPU_SCENE_CTL_CONFIG_READY,
+                );
+                uart.write_mmio("DPU1+0x34C_POST_RB=", DPU1_BASE + DPU_SCENE_CTL_VIDEO_MODE);
+                uart.write_mmio("DPU1+0x350_POST_RB=", DPU1_BASE + DPU_SCENE_CTL_SW_START);
+                uart.write_mmio("DPU1+0x3E8_POST_RB=", DPU1_BASE + DPU1_CMDLIST_CMPS);
+                uart.write_mmio("DPU1+0x3F4_POST_RB=", CMDLIST_CFG_READY_ADDR);
+                uart.write_mmio("CMP1+0x00_POST_RB=", DPU1_BASE + DPU1_COMPOSER1);
+                uart.write_mmio("CMP1+0x08_POST_RB=", DPU1_BASE + CMP_BG_R);
+                uart.write_mmio("CMP1+0x0C_POST_RB=", DPU1_BASE + CMP_BG_G);
+                uart.write_mmio("CMP1+0x10_POST_RB=", DPU1_BASE + CMP_BG_B);
+                uart.write_mmio("CMP1+0x14_POST_RB=", DPU1_BASE + CMP_BG_ALPHA);
+                uart.write_mmio("CMP1+0x20_POST_RB=", DPU1_BASE + CMP_LAYER0_AREA_X);
+                uart.write_mmio("CMP1+0x24_POST_RB=", DPU1_BASE + CMP_LAYER0_AREA_Y);
+                uart.write_mmio("CMP1+0x28_POST_RB=", DPU1_BASE + CMP_LAYER0_SOLID_R);
+                uart.write_mmio("CMP1+0x2C_POST_RB=", DPU1_BASE + CMP_LAYER0_SOLID_G);
+                uart.write_mmio("CMP1+0x30_POST_RB=", DPU1_BASE + CMP_LAYER0_SOLID_B);
+                uart.write_mmio("CMP1+0x34_POST_RB=", DPU1_BASE + CMP_LAYER0_SOLID_A);
+                uart.write_mmio("CMP1+0x38_POST_RB=", DPU1_BASE + CMP_LAYER0_CTRL);
+                uart.write_mmio("TMG0+0x00_POST_RB=", DPU1_BASE + DPU1_TMG0 + TMG_CTRL);
+                uart.write_mmio("DPU1+0x730_POST_RB=", DPU1_BASE + DPU_ONLINE_IRQ_STATUS);
+                uart.write_mmio("RDMA0+0xB4_POST_RB=", DPU1_BASE + RDMA_DBG_IRQ_STATUS);
+                uart.write_str("DPU_POST_COMMIT_END\n");
                 if msa_ok
                     && timing_enable_ok
                     && scene_cfg_ready_ok

@@ -828,3 +828,63 @@ SATURN_SOLID_BLUE_HOLD
 
 Le firmware reste actif sur la couleur bleue solide Saturn ; la confirmation
 visuelle du moniteur doit maintenant clôturer ce jalon.
+
+## 18 octobre 2026 — essai instrumenté interrompu par HPD absent
+
+Le firmware a été reconstruit avec des lectures UART supplémentaires après
+`SW_START`, puis chargé par TFTP à `0x140000000` (`36461` octets). Cet essai a
+confirmé les paramètres qui étaient suspects dans l'analyse précédente :
+
+```text
+RDMA0+0x3C_RB=0x00001900       # 6400 octets, 1600 x 4
+TBU0+0x28_RB=0x0000057F        # 1407 pages
+RDMA0+0x24_VA_RB=0x10000000
+RDMA0+0x28_VA_RB=0x00000000
+DMMU_STAGE_OK
+CMDLIST_STAGE_OK
+DPU_SCENE_STAGE_OK
+DPU_LAYER_STAGE_OK
+```
+
+Le test n'a pas atteint `DPU_POST_COMMIT` : après le lancement, U-Boot et le
+firmware n'ont pas détecté de HPD et les transactions AUX ont échoué :
+
+```text
+dp cannot get HPD signal
+AUX_AFTER_DPU_FAIL
+AUX_AFTER_PLL_FAIL
+DPCD_REV=0x00000000
+DPCD_RATE=0x00000000
+DPCD_LANES=0x00000000
+AUX_STAGE_READBACK_FAIL
+```
+
+Cette trace ne permet donc pas de conclure sur le compositeur. Le prochain
+essai doit commencer avec l'écran physiquement relié, la bonne entrée
+sélectionnée et le HPD présent ; les lectures `DPU_POST_COMMIT` pourront alors
+être observées après `SW_START`.
+
+## 18 octobre 2026 — vrai test Saturn bleu après reset
+
+Le drapeau de diagnostic `CMP_BACKGROUND_TEST` a été remis à `false`. L'essai
+précédent ne testait donc pas `layer00` : il désactivait volontairement la
+couche (`CMP1+0x38=0`) pour isoler le fond CMP. Après un reset réellement
+observé sur l'UART, le binaire de `36405` octets a été chargé par TFTP à
+`0x140000000`, vérifié par `md.b`, puis exécuté.
+
+La trace confirme cette fois la couche pleine Saturn et le maintien du flux :
+
+```text
+CMP1+0x38_ACTIVE_RB=0x0000FF09
+DPU1+0x348_CFG_READY_RB=0x00000001
+TMG0+0x00_ACTIVE_RB=0x00000181
+DPU_POST_COMMIT_END
+DP_MSA_STAGE_OK
+SCANOUT_STAGE_OK
+SATURN_SOLID_BLUE_HOLD
+```
+
+Le commit post-scène conserve `CMP1+0x38=0x0000FF09`, `CMP1+0x34=0x000100FF`
+et `CMP1+0x30=0x000003FF`; le watchdog est désactivé et le lien DP est
+entraîné (`LINK_TRAIN_OK`). La confirmation visuelle de l'écran reste à
+associer à cette exécution matérielle.
