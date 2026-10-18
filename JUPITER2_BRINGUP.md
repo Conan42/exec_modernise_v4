@@ -1687,3 +1687,31 @@ suivi par la séquence AUX normale (`AUX_STAGE_OK`), puis par
 Cette trace isole donc le prochain contrôle à effectuer : vérifier la couleur
 réellement reçue par le moniteur, puis comparer avec une variante où la cmdlist
 Saturn est réactivée. Le splash BGRA reste hors de ce test minimal.
+
+## 18 octobre 2026 — correction du test direct Saturn sans pixels
+
+La variante `SATURN_SOLID_DIRECT_TEST=true` n'affichait rien parce qu'elle
+mettait volontairement `DPU1+0x3E8` à zéro. Elle écrivait les champs `CMP1` par
+MMIO, mais désactivait au même moment la cmdlist compositeur HEE ; les
+readbacks `CMP1` ne constituaient donc pas une preuve de scène active.
+
+Le firmware a été corrigé avec `SATURN_SOLID_DIRECT_TEST=false`, ce qui réactive
+la soumission de la couche par la cmdlist constructeur. Après reset, TFTP et
+exécution, l'UART confirme :
+
+```text
+SATURN_MODE=SOLID_CMDLIST
+DPU1+0x3E8_RB=0x00000003
+DPU1+0x340_RB=0x01040000
+DPU1+0x34C_RB=0x00000411
+CMP1+0x38_ACTIVE_RB=0x0000FF09
+DPU1+0x3E8_POST_RB=0x00000003
+LINK_TRAIN_OK
+SCANOUT_STAGE_OK
+SATURN_SOLID_BLUE_HOLD
+```
+
+La couche bleue est désormais envoyée par le chemin HEE utilisé par le pilote
+Linux. Si l'écran reste noir malgré cette variante, la prochaine sonde devra
+lire l'état de reload/consommation de la cmdlist et du compositeur, car les
+readbacks des registres d'écriture sont alors insuffisants.

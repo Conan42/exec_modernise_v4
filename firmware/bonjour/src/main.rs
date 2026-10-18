@@ -41,10 +41,10 @@ const SATURN_SOLID_TEST: bool = true;
 // Hold the first solid-blue frame while debugging the Saturn path. The RGB
 // cycle remains available for a later visual test once a stable frame exists.
 const SATURN_SOLID_CYCLE_TEST: bool = false;
-// First isolate the direct CMP1 layer writes from the Saturn composer cmdlist.
-// The Linux path uses the cmdlist, but a direct-only pass tells us whether the
-// no-signal symptom is caused by list execution or by the solid layer itself.
-const SATURN_SOLID_DIRECT_TEST: bool = true;
+// The HEE composer commits layer registers through its cmdlist. Direct MMIO
+// readbacks alone do not make a scene active, so keep the constructor's
+// composer cmdlist enabled for the visible solid-color test.
+const SATURN_SOLID_DIRECT_TEST: bool = false;
 // Set this to true only for the known-good blue reference. It bypasses Saturn
 // entirely; false selects the normal Saturn/RDMA stream.
 const DP_COLORBAR_TEST: bool = false;

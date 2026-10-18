@@ -927,3 +927,31 @@ séquence AUX de récupération atteint ensuite `AUX_STAGE_OK` et
 `LINK_TRAIN_OK`. Cette exécution prouve le chemin de contrôle jusqu'au maintien
 du bleu solide ; la couleur effectivement observée sur le moniteur doit encore
 être associée à cette trace. Le splash BGRA n'est pas activé dans ce test.
+
+## 18 octobre 2026 — correction du test direct Saturn sans pixels
+
+Le test `SATURN_SOLID_DIRECT_TEST=true` a été exécuté et n'a rien affiché.
+Cette variante désactivait `DPU1+0x3E8`, donc la cmdlist du compositeur HEE,
+malgré des readbacks corrects des registres `CMP1`. Ces readbacks ne prouvaient
+pas que la scène était consommée par le matériel.
+
+Le test a été corrigé avec `SATURN_SOLID_DIRECT_TEST=false`. Le nouveau binaire
+(`36501` octets) réactive la cmdlist constructeur :
+
+```text
+SATURN_MODE=SOLID_CMDLIST
+DPU1+0x3E8_RB=0x00000003
+DPU1+0x340_RB=0x01040000
+DPU1+0x34C_RB=0x00000411
+CMP1+0x38_ACTIVE_RB=0x0000FF09
+DPU1+0x3E8_POST_RB=0x00000003
+LINK_TRAIN_OK
+SCANOUT_STAGE_OK
+SATURN_SOLID_BLUE_HOLD
+```
+
+Cette exécution est la première qui soumet réellement la couche bleue par la
+cmdlist HEE. La confirmation visuelle est maintenant le contrôle utile ; si le
+moniteur reste noir, le prochain relevé portera sur l'événement de reload de la
+cmdlist et sur les registres d'état du compositeur, plutôt que sur les seuls
+readbacks CPU.
