@@ -289,3 +289,107 @@ sur le pilote constructeur en utilisant le champ complet `VIDEO_RESET[3:0]`.
 Cette correction est compilée dans le prochain `bonjour-jupiter2.bin`. Elle
 doit encore être exécutée sur la Jupiter 2 et vérifiée visuellement avant de
 conclure sur le signal HDMI.
+
+## Lecture du registre DPU Saturn HEE — 18 octobre 2026
+
+La documentation K3 générale décrit les capacités du DPU, mais pas le détail
+des registres Saturn HEE. Pour lever cette ambiguïté, le portage a été comparé
+au pilote constructeur public [`dpu_saturn_hee.c`](https://github.com/spacemit-com/linux-6.18/blob/k3-br-v1.0.y/drivers/gpu/drm/spacemit/dpu/dpu_saturn_hee.c)
+et à ses en-têtes de registres :
+[`reg_map_hee.h`](https://github.com/spacemit-com/linux-6.18/blob/k3-br-v1.0.y/drivers/gpu/drm/spacemit/dpu/saturn_regs/reg_map_hee.h),
+[`composer_x.h`](https://github.com/spacemit-com/linux-6.18/blob/k3-br-v1.0.y/drivers/gpu/drm/spacemit/dpu/saturn_regs/composer_x.h),
+[`dpu_scene_ctl.h`](https://github.com/spacemit-com/linux-6.18/blob/k3-br-v1.0.y/drivers/gpu/drm/spacemit/dpu/saturn_regs/dpu_scene_ctl.h)
+et [`cmdlist_top.h`](https://github.com/spacemit-com/linux-6.18/blob/k3-br-v1.0.y/drivers/gpu/drm/spacemit/dpu/saturn_regs/cmdlist_top.h).
+
+La variante active est bien la variante HEE :
+
+| Bloc | Offset DPU1 | Rôle |
+|---|---:|---|
+| scene control 1 | `0x340` | routage RDMA, sortie, timing, `CFG_READY`, `SW_START` |
+| DPU control top | `0x3C0` | activation des canaux cmdlist RDMA/compositeur |
+| cmdlist | `0x500` | listes ; compositeur DPU1 sur canal 7 ; validation `CFG_RDY` à `DPU_CTRL_TOP+0x34 = 0x3F4` |
+| RDMA0 | `0x1000` | source mémoire et format |
+| TBU0 | `0x1100` | traduction DMMU du plane |
+| composer CMP1 | `0x30000` | sortie et couches de composition |
+| timing TMG0 | `0x51200` | minutage du flux vidéo |
+
+Pour `layer00`, le pilote HEE définit :
+
+```text
+CMP1+0x28  layer00_solid_color_r   10 bits
+CMP1+0x2C  layer00_solid_color_g   10 bits
+CMP1+0x30  layer00_solid_color_b   10 bits
+CMP1+0x34  alpha 0:7, solid_area_mode bit 16
+CMP1+0x38  en bit 0, blend_sel 1:2, solid_en bit 3, alpha 8:15
+```
+
+Le firmware V4 a été corrigé pour programmer les champs de scène aux positions
+réelles de `dpu_scene_ctl.h` : `timing_inter0` occupe les bits `6:1` et
+`timing_inter1` les bits `12:7`. La valeur attendue de `video_mode` est donc
+`0x411` lorsque les deux intervalles valent 8. Le pilote constructeur
+`saturn_get_cl_cfg_rdy_addr()` place la dernière ligne de cmdlist à
+`DPU1+0x3F4` (`DPU_CTRL_TOP+0x34`). `DPU1+0x534` est réservé dans
+`cmdlist_top.h`. Pour le composer 1, les deux bits d'activation de cmdlist
+sont à `DPU1+0x3E8` (`DPU_CTRL_TOP+0x28`).
+La liste du compositeur DPU1 doit être chargée dans le canal 7
+(`rdma_nums=4`, `crtc_id=1`, donc `4+2+1`), comme dans `wb_cmdlist()` du
+pilote constructeur.
+
+Cette vérification explique pourquoi les anciens readbacks UART pouvaient être
+corrects tout en produisant du noir : ils confirmaient des écritures dans des
+registres accessibles, mais pas que les champs HEE étaient encodés aux bons
+bits ni que la cmdlist pointait vers son registre `CFG_RDY` réel.
+
+## Validation matérielle du correctif
+
+Le binaire corrigé a été transféré par TFTP puis exécuté depuis U-Boot. La
+trace UART confirme le canal 7 du compositeur, `video_mode=0x411`,
+`CMP1+0x3E8=0x3`, la couche pleine bleue et le scanout DP :
+
+```text
+CMDLIST_STAGE_OK
+CMDLIST_ENABLE_OK
+DPU_SCENE_STAGE_OK
+DPU_LAYER_STAGE_OK
+LINK_TRAIN_OK
+DP_MSA_STAGE_OK
+SCANOUT_STAGE_OK
+SATURN_SOLID_BLUE_HOLD
+```
+
+Le chemin DPU/DP est actif sur la carte ; l'observation du moniteur doit
+maintenant confirmer le bleu solide produit par Saturn.
+
+## Échec d'affichage du flux Saturn — 18 octobre 2026
+
+Le test qui a suivi a désactivé la mire DP et a demandé à `CMP1` de produire
+directement un fond rouge, avec `layer00` désactivée :
+
+```text
+DP_COLORBAR_TEST=false
+TMG_BACKGROUND_TEST=false
+CMP_BACKGROUND_TEST=true
+SATURN_SOLID_TEST=true
+CMP1+0x08_BG_R_RB=0x000003FF
+CMP1+0x0C_BG_G_RB=0x00000000
+CMP1+0x10_BG_B_RB=0x00000000
+CMP1+0x38_ACTIVE_RB=0x00000000
+CMP_BACKGROUND_RED_HOLD
+```
+
+L'écran est resté noir. Cette observation invalide la conclusion précédente
+selon laquelle les readbacks `CMP1`, `CMDLIST_ENABLE_OK` et
+`SCANOUT_STAGE_OK` suffiraient à prouver la production de pixels. Ils prouvent
+que les registres sont accessibles et que la séquence de contrôle se termine ;
+ils ne prouvent pas que le flux Saturn atteint effectivement le TMG puis le
+transmetteur DP.
+
+Les tests de référence ont pourtant réussi : Bianbu affiche l'écran de
+connexion, le fond rouge programmé directement par TMG est visible et la mire
+DP interne bleue est visible avec la même chaîne USB-C/HDMI/DVI. Le défaut
+reste donc dans le chemin DPU1/Saturn vers le scanout normal, probablement dans
+le commit effectif de scène/compositeur, le routage de cmdlist, le plane
+RDMA/DMMU ou la sélection de la source TMG.
+
+État de validation : `SPLASH_OK` n'est pas obtenu, le splash BGRA n'est pas
+affiché et le bring-up vidéo Saturn est suspendu sur cet échec reproductible.

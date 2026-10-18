@@ -8,8 +8,12 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 
 const TFTP_DATA_SIZE: usize = 512;
-const TFTP_TIMEOUT: Duration = Duration::from_secs(3);
-const TFTP_RETRIES: usize = 3;
+// U-Boot's Jupiter client can lose an individual UDP datagram while the
+// Ethernet PHY is settling. Shorter retry intervals keep the client inside
+// its own timeout window, while the larger retry budget makes the 5.76 MiB
+// splash transfer reliable on this direct local link.
+const TFTP_TIMEOUT: Duration = Duration::from_millis(500);
+const TFTP_RETRIES: usize = 20;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -161,7 +165,15 @@ fn request_file(root: &Path, name: &str) -> Result<Vec<u8>> {
     Ok(data)
 }
 
-fn serve_file(socket: &UdpSocket, peer: SocketAddr, data: &[u8]) -> Result<()> {
+fn serve_file(_listen_socket: &UdpSocket, peer: SocketAddr, data: &[u8]) -> Result<()> {
+    // TFTP assigns a fresh transfer identifier (an ephemeral UDP port) to
+    // every RRQ. Keeping DATA/ACK traffic away from port 69 is required by
+    // the bootloader's TFTP client and prevents a retry from being confused
+    // with a new request on the listening socket.
+    let socket = UdpSocket::bind("0.0.0.0:0").context("création du port TFTP de transfert")?;
+    socket
+        .set_read_timeout(Some(TFTP_TIMEOUT))
+        .context("configuration du délai du port TFTP de transfert")?;
     let mut block: u16 = 1;
     let mut offset = 0;
     loop {
@@ -171,7 +183,7 @@ fn serve_file(socket: &UdpSocket, peer: SocketAddr, data: &[u8]) -> Result<()> {
         packet.extend_from_slice(&3_u16.to_be_bytes());
         packet.extend_from_slice(&block.to_be_bytes());
         packet.extend_from_slice(chunk);
-        send_with_ack(socket, peer, &packet, block)?;
+        send_with_ack(&socket, peer, &packet, block)?;
         offset = end;
         if chunk.len() < TFTP_DATA_SIZE {
             break;

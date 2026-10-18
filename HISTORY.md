@@ -94,6 +94,15 @@ marqueurs `DMMU_STAGE_OK`, `CMDLIST_ENABLE_OK`, `LINK_TRAIN_OK`,
 l'UART. Le HP Compaq LA2006x reste sans signal via l'adaptateur USB-C/HDMI,
 si bien que `SPLASH_OK` reste ouvert.
 
+Le premier affichage V4 n'est pas encore obtenu. Bianbu affiche correctement
+son écran de connexion avec le même HP Compaq LA2006x et le même adaptateur
+USB-C/HDMI ; une mire DP interne bleue et un fond rouge généré directement par
+TMG ont également été visibles. En revanche, le dernier test du flux normal
+Saturn/compositeur est resté noir malgré `LINK_TRAIN_OK`, `DP_MSA_STAGE_OK` et
+`SCANOUT_STAGE_OK`. `SPLASH_OK` reste donc absent. Le défaut est circonscrit
+au chemin DPU1/Saturn (`CMP1`, scène, cmdlist, RDMA/DMMU ou routage vers TMG),
+et non à la liaison physique validée.
+
 La procédure et les traces détaillées sont dans
 [`JUPITER2_BRINGUP.md`](JUPITER2_BRINGUP.md), tandis que l'état synthétique est
 tenue dans [`PROGRESS.md`](PROGRESS.md).

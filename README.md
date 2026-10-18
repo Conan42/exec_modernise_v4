@@ -27,10 +27,15 @@ validation.
 
 Le firmware `bonjour` est transféré par TFTP et exécuté sur la Jupiter 2. Les
 étapes UART `DMMU_STAGE_OK`, `CMDLIST_ENABLE_OK`, `LINK_TRAIN_OK`,
-`DP_MSA_STAGE_OK`, `SCANOUT_STAGE_OK` et `MMIO_PROBE_OK` sont confirmées. Le
-HP Compaq LA2006x reste sans signal via l'adaptateur USB-C/HDMI ;
-`SPLASH_OK` n'est pas déclaré. Le prochain diagnostic devra isoler la sortie
-USB-C/HDMI et la synchronisation finale du moniteur.
+`DP_MSA_STAGE_OK`, `SCANOUT_STAGE_OK` et `MMIO_PROBE_OK` sont confirmées.
+L'affichage V4 reste toutefois en échec pour le flux Saturn/RDMA : le dernier
+test de fond du compositeur produit un écran noir et `SPLASH_OK` n'est pas
+déclaré.
+
+La chaîne physique est validée indépendamment : Bianbu affiche son écran de
+connexion avec le même adaptateur USB-C/HDMI, le fond rouge généré directement
+par TMG a été visible et la mire DP interne bleue est visible. Le défaut est
+donc circonscrit au chemin de composition DPU/Saturn vers le scanout normal.
 
 Le premier jalon est volontairement limité à la communication avec la carte :
 

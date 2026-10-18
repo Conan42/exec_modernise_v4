@@ -376,3 +376,455 @@ Le lancement `go 0x140000000` a ensuite produit `UART_OK`, `TIMING_STAGE_OK`,
 `DP_MSA_STAGE_OK`, `SCANOUT_STAGE_OK` et `MMIO_PROBE_OK`. Le firmware V4
 s'exécute donc bien sur la carte ; `SPLASH_OK` reste réservé à la confirmation
 visuelle sur le moniteur.
+
+## 17 octobre 2026 — activation explicite du plane Saturn
+
+La comparaison avec le pilote Linux a révélé que le firmware ne vérifiait pas
+la couche composite après `SW_START`. `CMP1+0x38` était initialisé à zéro,
+alors que le commit Linux programme `layer00_ctrl=0x0000FF03` pour activer
+RDMA0 dans le compositeur. Le firmware écrit désormais cette valeur et ajoute
+le jalon `DPU_LAYER_STAGE_OK`. L'image reconstruite mesure `31125` octets;
+elle doit encore être exécutée après reset et vérifiée sur le moniteur.
+
+## 17 octobre 2026 — correction de l'activation de scène DPU1
+
+Une première exécution du binaire avec l'activation de `DPU1+0x380` bloquait
+à `DPU_SCENE_STAGE_BEGIN`. Trois appels `write_field()` utilisaient encore les
+bornes dans l'ordre `low, high`, contrairement au contrat `high, low` de la
+fonction. Les champs scène `9:0`, `7:2` et `13:8` ont été corrigés.
+
+La nouvelle exécution atteint `DPU_SCENE_STAGE_OK` avec les readbacks
+`DPU1+0x380=0x01040001` et `DPU1+0x38C=0x00000821`. Elle atteint également
+`LINK_TRAIN_OK` et confirme `TMG0+0x00=0x00000184`. Le registre
+`DPU1+0x390_SW_START` revient à zéro après écriture, ce qui correspond à un
+strobe auto-effacé ; le firmware accepte désormais ce readback pour cette
+commande. L'image de test de `31053` octets a été compilée et placée dans
+`tftp-root/`. Il reste à l'exécuter après reset et à confirmer le signal du
+moniteur avant de publier `SPLASH_OK`.
+
+## 17 octobre 2026 — trace complète après correction du strobe DPU1
+
+Après reset, le binaire de `31053` octets a été transféré et exécuté sur la
+Jupiter 2. La trace UART atteint désormais `DPU_SCENE_STAGE_OK`,
+`LINK_TRAIN_OK`, `DP_MSA_STAGE_OK`, `SCANOUT_STAGE_OK` et `MMIO_PROBE_OK`.
+Le readback `DPU1+0x390_SW_START_RB=0x00000000` est accepté comme état normal
+du strobe auto-effacé. Le chemin logiciel et matériel jusqu'à l'activation du
+scanout est confirmé; `SPLASH_OK` attend encore l'observation du moniteur.
+
+## 17 octobre 2026 — flux DP normal et diagnostic du scanout
+
+La mire interne DP a été désactivée (`DP1+0x238=0`) afin de tester le vrai
+framebuffer BGRA à travers RDMA0, Saturn et le compositeur. Cette configuration
+reproduit le pilote Linux, qui met `VID_BIST_EN` à zéro avant d'activer le flux
+vidéo. Le format TMG RGB888 et le flux DP normal restent actifs.
+
+La trace ajoute les readbacks du statut IRQ online de DPU1 (`+0x70C` et
+`+0x730`) et du bloc debug RDMA0 (`+0xAC`, `+0xB0`, `+0xB4`, `+0xBC` à
+`+0xCC`). Cela permettra de distinguer une absence de requêtes mémoire, un
+underrun DPU et un flux DP sans signal.
+
+La vérification locale est passée : formatage Rust, `cargo test --workspace`
+(142 tests), `git diff --check` et compilation firmware. La nouvelle image
+`tftp-root/bonjour-jupiter2.bin` mesure `35461` octets. Le port UART est
+accessible et TFTP écoute sur UDP 69; l'écoute UART réalisée sans reset n'a
+produit aucune nouvelle trace, ce qui laisse la carte dans la boucle `WFI` de
+l'exécution précédente. Le test matériel doit donc commencer par un reset,
+puis le chargement TFTP de cette image et son lancement par `go`.
+
+## 17 octobre 2026 — lancement V4 et validation du chemin scanout
+
+Après reset, U-Boot a reconnu le HP Compaq LA2006x en `1600x900` et s'est
+arrêté sur `V4_BOOT_HALTED`. Le transfert direct du splash de `5760000` octets
+perdait des ACK à des blocs variables malgré le serveur TFTP renforcé. Le
+fichier a été découpé en 88 morceaux de 64 KiB et chargé successivement à
+partir de `0x102000000`; les `5760000` octets ont été transférés correctement.
+
+Le binaire V4 de `35461` octets a ensuite été lancé à `0x140000000`. La trace
+atteint `LINK_TRAIN_OK`, `DP_MSA_STAGE_OK`, `SCANOUT_STAGE_OK` et
+`SCANOUT_DIAG_OK`. Les diagnostics indiquent `DPU1+0x730_IRQ_STATUS=0` et
+`RDMA0+0xB4_DBG_STATUS=0`, sans underrun DPU ni erreur RDMA détectée. Le
+framebuffer BGRA est donc maintenant engagé dans le flux DP normal;
+`SPLASH_OK` attend toujours la confirmation visuelle.
+
+## 17 octobre 2026 — réapplication du framing DP après reset
+
+La comparaison avec `spacemit_inno_dp.c` a identifié une omission dans la
+séquence V4 : le pilote constructeur applique `ENHANCE_FRAMING_EN=1` après la
+sortie des resets DP. V4 le configurait avant `DP_SOFT_RESET`, ce qui pouvait
+laisser le bit 30 effacé tout en conservant un link training valide.
+
+Le firmware réapplique maintenant, après le reset DP, les champs
+`SCRAMBLER_DISABLE=0`, `ENHANCE_FRAMING_EN=1`, `DEFAULT_FAST_LINK_TRAIN=0`
+et `SCALE_DOWN_MODE=0`. Il journalise aussi les lectures de
+`DP1+0x018`, du statut HPD `DP1+0x088` et des interruptions générales après
+l'activation du flux. Le nouveau binaire est construit dans
+`tftp-root/bonjour-jupiter2.bin` et mesure `35597` octets.
+
+Les vérifications locales `cargo fmt --all -- --check` et `git diff --check`
+sont passées. Une écoute UART sans reset n'a reçu aucune nouvelle trace : la
+Jupiter est encore dans la boucle `WFI` de l'image précédente. Le prochain
+essai matériel doit donc commencer par un reset, puis les mêmes transferts
+TFTP et `go 0x140000000`. `SPLASH_OK` reste réservé à la confirmation visuelle.
+
+## 17 octobre 2026 — exécution du correctif DP post-reset
+
+Après reset, U-Boot a de nouveau détecté le HP Compaq LA2006x en `1600x900`,
+et les 88 morceaux du framebuffer ont été chargés à partir de `0x102000000`.
+Le nouveau binaire de `35597` octets a été transféré à `0x140000000` puis
+exécuté.
+
+La trace UART confirme que le champ de framing reste actif après les resets :
+
+```text
+DP1+0x018_CORE_RB=0x40000000
+DP1+0x018_CORE_ACTIVE_RB=0x40000000
+DP1+0x088_HPD_RB=0x27800000
+LINK_TRAIN_OK
+DP_MSA_STAGE_OK
+SCANOUT_STAGE_OK
+SCANOUT_DIAG_OK
+MMIO_PROBE_OK
+```
+
+Le HPD est présent, le link training reste valide après l'activation du flux,
+et aucun underrun DPU/RDMA n'est signalé. La validation visuelle du splash
+reste le seul point à confirmer sur le moniteur.
+
+## 17 octobre 2026 — pause de fin de session
+
+Après cette exécution, le HP Compaq LA2006x reste sans signal malgré la trace
+complète côté Jupiter : HPD présent, framing DP actif, link training réussi,
+MSA configuré et aucun événement d'underrun DPU/RDMA. Le framebuffer BGRA est
+donc engagé dans le chemin normal, mais l'image n'est pas confirmée côté
+moniteur.
+
+La prochaine session commencera par l'activation temporaire de la mire interne
+du transmetteur DP (`VID_BIST_EN=1`). Si la mire apparaît, le problème restant
+sera limité au chemin Saturn/RDMA/framebuffer ; sinon, il faudra poursuivre sur
+le flux DP ou la conversion USB-C/HDMI. `SPLASH_OK` reste volontairement absent.
+
+## 18 octobre 2026 — test d'un framebuffer rouge minimal
+
+Pour simplifier la preuve d'affichage, le splash a été remplacé par une surface
+BGRA8 uniforme rouge (`B=0x00`, `G=0x00`, `R=0xFF`, `A=0xFF`), en 1600×900,
+chargée par 88 morceaux de 64 KiB. Le firmware laisse la mire DP interne
+désactivée (`DP1+0x238=0`) et utilise le flux normal Saturn/RDMA.
+
+Le test a été transféré et exécuté avec succès jusqu'au scanout :
+
+```text
+RED_FRAMEBUFFER_TEST_BEGIN
+DP1+0x238_COLORBAR_RB=0x00000000
+LINK_TRAIN_OK
+DP_MSA_STAGE_OK
+SCANOUT_STAGE_OK
+SCANOUT_DIAG_OK
+MMIO_PROBE_OK
+```
+
+Le binaire mesure `35621` octets. Le moniteur doit maintenant afficher une
+surface rouge uniforme ; `SPLASH_OK` reste en attente de confirmation visuelle.
+
+## 18 octobre 2026 — mire interne DP et entrée DVI
+
+La surface rouge n'ayant pas produit l'image attendue, le firmware a été
+basculé sur la mire interne du transmetteur DP. Cette mire ne lit ni le
+framebuffer ni Saturn/RDMA :
+
+```text
+DP_COLORBAR_TEST_BEGIN
+DP1+0x238_COLORBAR_RB=0x00000001
+LINK_TRAIN_OK
+DP_MSA_STAGE_OK
+SCANOUT_STAGE_OK
+SCANOUT_DIAG_OK
+MMIO_PROBE_OK
+```
+
+Le contrôleur DP émet donc maintenant son propre motif de test. La sortie
+physique reste du DisplayPort Alt Mode sur USB-C, converti par l'adaptateur en
+HDMI. Une entrée DVI du HP Compaq ne peut recevoir ce signal qu'au moyen d'une
+liaison HDMI vers DVI-D compatible. Si la mire reste absente sur DVI, la suite
+doit vérifier cette conversion et la sélection d'entrée du moniteur avant de
+reprendre Saturn/RDMA.
+
+La mire interne a ensuite été réellement chargée après configuration réseau
+U-Boot et transfert du binaire de `35621` octets. La trace confirme
+`DP_COLORBAR_TEST_BEGIN`, `DP1+0x238_COLORBAR_RB=0x00000001`,
+`LINK_TRAIN_OK`, `DP_MSA_STAGE_OK` et `SCANOUT_DIAG_OK`. Le moniteur reste
+cependant sans signal sur l'entrée DVI.
+
+L'utilisateur observe maintenant un écran bleu avec cette mire. C'est la
+première confirmation visuelle du chemin complet Jupiter 2 → DisplayPort
+Alt Mode USB-C → adaptateur HDMI → liaison DVI → HP Compaq LA2006x. Le DP et
+la conversion physique sont donc validés ; le prochain travail revient au
+chemin Saturn/RDMA et à l'interprétation du framebuffer BGRA, qui affichait
+précédemment du noir au lieu du rouge.
+
+## 18 octobre 2026 — cycle framebuffer bleu rouge vert
+
+La mire interne a été remplacée par un cycle réel du framebuffer BGRA. Le
+firmware écrit directement dans la surface 1600×900 puis maintient chaque
+couleur assez longtemps pour l'observation :
+
+```text
+RGB_CYCLE_TEST_BEGIN
+RGB_CYCLE_BLUE
+RGB_CYCLE_RED
+RGB_CYCLE_GREEN
+RGB_CYCLE_DONE
+```
+
+La trace complète conserve `LINK_TRAIN_OK`, `DP_MSA_STAGE_OK`,
+`SCANOUT_DIAG_OK` et `MMIO_PROBE_OK`. La validation visuelle attendue est une
+succession bleu, rouge, vert ; ce test vérifie enfin le chemin Saturn/RDMA en
+plus du transmetteur DP.
+
+## 18 octobre 2026 — mire compositeur sans framebuffer
+
+Le cycle framebuffer n'a produit aucun signal, alors que la mire DP interne a
+affiché du bleu. `firmware/bonjour` active maintenant `SATURN_SOLID_TEST` :
+`CMP1/layer00` génère directement une couleur pleine RGB 10 bits et le canal
+RDMA est désactivé. Le firmware cycle bleu, rouge et vert par registres Saturn
+après l'activation du scanout.
+
+Les vérifications locales passent (`cargo fmt`, compilation RISC-V, 142 tests
+workspace et `git diff --check`). Le binaire a été généré dans
+`tftp-root/bonjour-jupiter2.bin` et mesure 36 365 octets. Le test matériel
+reste à exécuter après reset et doit être jugé par la trace UART et l'image
+réellement visible.
+
+## 18 octobre 2026 — exécution de la mire Saturn solide
+
+La nouvelle image a été transférée par TFTP et exécutée après reset. La trace
+UART confirme que le canal RDMA est désactivé (`DPU1+0x380_RB=0x01040000`), que
+`CMP1/layer00` est actif en couleur pleine (`CMP1+0x38=0x0000FF09`) et que le
+firmware a accepté les trois mises à jour :
+
+```text
+RGB_CYCLE_SOLID_BLUE_OK
+RGB_CYCLE_SOLID_RED_OK
+RGB_CYCLE_SOLID_GREEN_OK
+```
+
+Le chemin logiciel du compositeur est donc validé sans lecture framebuffer.
+L'observation réelle du moniteur doit encore déterminer si cette mire est
+visible et permettre de localiser la panne restante si l'écran reste muet.
+
+## 18 octobre 2026 — reproduction du bleu DP
+
+La mire interne DP a été réactivée dans le firmware et maintenue en continu.
+La trace UART confirme `DP1+0x238_COLORBAR_RB=0x00000001`, `LINK_TRAIN_OK`,
+`DP_MSA_STAGE_OK`, `SCANOUT_STAGE_OK` et `DP_COLORBAR_BLUE_HOLD`. L'écran
+affiche de nouveau le bleu.
+
+Cette répétition valide la chaîne physique et le transmetteur DP. Elle montre
+également que l'absence d'image avec Saturn est indépendante du câble, de
+l'adaptateur USB-C/HDMI, de l'entrée DVI et du moniteur. Le prochain test doit
+revenir au compositeur Saturn en conservant cette référence DP connue.
+
+## 18 octobre 2026 — transfert du splash
+
+`splashscreen-1600x900.bgra` a été chargé avec succès par TFTP à l'adresse
+DRAM `0x102000000` (`5 760 000` octets). Le firmware de référence DP bleu est
+encore actif ; ce transfert valide la présence du splash en mémoire mais ne
+constitue pas une preuve d'affichage.
+
+## 18 octobre 2026 — flux Saturn/RDMA relancé
+
+Le splash présent à `0x102000000` a été conservé, puis le firmware a été
+reconstruit sans mire DP et sans couche solide. L'exécution réelle confirme
+`DPU1+0x380_RB=0x01040001`, `CMP1+0x38_ACTIVE_RB=0x0000FF03`,
+`DP1+0x238_COLORBAR_RB=0x00000000` et le cycle `RGB_CYCLE_BLUE`,
+`RGB_CYCLE_RED`, `RGB_CYCLE_GREEN`, `RGB_CYCLE_DONE`. L'affichage visible
+reste à confirmer.
+
+## 18 octobre 2026 — échec d'affichage Saturn documenté
+
+Le dernier essai a utilisé le fond rouge du compositeur `CMP1` avec la mire DP
+désactivée. Le firmware a publié `CMP_BACKGROUND_RED_HOLD` après les étapes
+de configuration DPU/DP, mais l'écran est resté noir. Le résultat est donc un
+échec visuel du flux Saturn/compositeur, malgré les readbacks UART et
+`SCANOUT_STAGE_OK`.
+
+Les contrôles de séparation sont concluants : Bianbu affiche son écran de
+connexion avec le même écran HP Compaq LA2006x et le même adaptateur
+USB-C/HDMI, le fond rouge produit directement par TMG a été visible et la
+mire DP interne bleue a été reproduite. La liaison physique, l'adaptateur, le
+moniteur et le transmetteur DP ne sont donc plus les hypothèses prioritaires.
+
+À ce point, `SCANOUT_STAGE_OK` signifie seulement que la séquence de registres
+a été exécutée et relue ; il ne vaut pas preuve de pixels visibles.
+`SPLASH_OK` reste absent. La reprise devra comparer le commit effectif du
+compositeur Saturn, le routage scène DPU1, la cmdlist du canal 7, le plane
+RDMA/DMMU et le chemin TMG.
+
+## 18 octobre 2026 — horloges APMU et référence DP
+
+Le relevé Linux du DPU1 confirme les fréquences utilisées par le pilote :
+PXCLK environ `107142857 Hz` (mode DP réglé à `108000 kHz`), MCLK
+`307200000 Hz` et ACLK `409600000 Hz`. Le firmware écrivait auparavant les
+gates PXCLK/MCLK dans `LCD_CLK_RES_CTRL3`, qui est le registre de l'horloge
+ESC. Le portage les applique maintenant dans `LCD_CLK_RES_CTRL4` et programme
+explicitement les sélecteurs/diviseurs PXCLK, MCLK et ACLK selon l'arbre Linux.
+
+Après reconstruction (`bonjour-jupiter2.bin`, `36477` octets), le flux normal
+a confirmé `APMU_ENABLE_OK`, `LINK_TRAIN_OK`, `DP_MSA_STAGE_OK` et
+`SCANOUT_STAGE_OK`. La mire interne DP a ensuite été reproduite avec :
+
+```text
+DP1+0x238_COLORBAR_RB=0x00000001
+DP_COLORBAR_BLUE_HOLD
+```
+
+Le firmware du dépôt est revenu à `DP_COLORBAR_TEST=false` après ce contrôle ;
+la prochaine exécution à transférer est donc le flux splash Saturn/RDMA.
+
+## 18 octobre 2026 — watchdog hérité d'U-Boot identifié
+
+La mire bleue disparaissait après environ une minute. L'UART a montré que
+U-Boot démarre `watchdog@d4014000` avec un délai de 60 secondes et que ce
+watchdog n'est plus rafraîchi après la commande `go`. Le firmware bare-metal
+était donc réinitialisé pendant le test ; la disparition de la mire ne
+provenait pas du lien USB-C/HDMI.
+
+WDT0 est maintenant désactivé au tout début de `rust_main()` avec les clés
+K3 documentées (`0xBABA`, `0xEB10`) et `TWER=0`. Le binaire de test a été
+reconstruit à 35837 octets avec `DP_COLORBAR_TEST=true`, pour conserver la
+mire DP bleue connue comme référence physique. La prochaine capture UART
+doit contenir `WDT_DISABLED` et rester active au-delà de 60 secondes avant de
+repasser au chemin Saturn/RDMA puis au splash.
+
+## 18 octobre 2026 — mire bleue stable au-delà du timeout
+
+L'image de 35837 octets a été chargée et lancée. L'UART a confirmé
+`WDT0+0x0B8_RB=0x00000000`, `WDT_DISABLED`,
+`DP1+0x238_COLORBAR_RB=0x00000001` et `DP_COLORBAR_BLUE_HOLD`. Après plus de
+60 secondes, aucune nouvelle séquence U-Boot n'est apparue : le watchdog
+hérité est neutralisé et la mire DP reste active. Le diagnostic matériel peut
+maintenant reprendre avec Saturn/RDMA et le splash.
+
+La mire bleue est visible sur le HP Compaq LA2006x et reste affichée. Le
+transmetteur DP et toute la chaîne USB-C/HDMI sont validés ; le défaut restant
+est limité au chemin de composition Saturn/RDMA vers le framebuffer.
+
+## 18 octobre 2026 — handshake scène DPU1 corrigé
+
+Le test Saturn pleine couleur validait les écritures `CMP1` sur l'UART, mais
+ne produisait toujours aucune image. Le pilote constructeur montre que le
+handshake de DPU1 doit utiliser le bloc scène à `0x340` : `both_cfg_rdy` à
+`0x348` et `sw_start` à `0x350`. Le firmware les envoyait auparavant à
+`0x388/0x390`, qui correspondent au bloc scène 2 et ne démarrent pas le flux
+DPU1.
+
+Le correctif a été compilé et copié dans
+`tftp-root/bonjour-jupiter2.bin` (`40645` octets). La validation matérielle
+reste à faire après reset et lancement U-Boot ; la trace attendue doit afficher
+`DPU1+0x348_CFG_READY_RB` et `DPU1+0x350_SW_START_RB`.
+
+## 18 octobre 2026 — flux actif, couleur Saturn à isoler
+
+Le binaire corrigé a été chargé et lancé. L'UART confirme le handshake DPU1
+sur `0x348/0x350`, `DP_MSA_STAGE_OK`, `SCANOUT_STAGE_OK` et les trois mises à
+jour de couleur Saturn. Le moniteur affiche désormais un écran gris : le flux
+vidéo est donc visible, mais la couleur de `layer00` n'est pas encore correcte.
+
+Une image de diagnostic de `35981` octets est prête. Elle désactive `layer00`
+et programme directement un fond rouge dans TMG0 pour isoler le compositeur
+du chemin de sortie DP.
+
+L'image a été exécutée après reset. L'UART confirme
+`TMG0+0x24_BG_RG_RB=0x00000FFF`, `TMG0+0x28_BG_B_RB=0x00000000`,
+`DP_MSA_STAGE_OK`, `SCANOUT_STAGE_OK` et `TMG_BACKGROUND_RED_HOLD`. Le contrôle
+visuel doit déterminer si ce fond rouge apparaît correctement.
+
+Le rouge est visible sur le moniteur. Le chemin DP et le timing sont validés ;
+le défaut est localisé à la configuration de `layer00` Saturn. Le prochain
+binaire (`40685` octets) active `solid_area_mode` et remet le fond TMG au noir
+pour retester la couche Saturn seule.
+
+## 18 octobre 2026 — référence DP bleue confirmée après reset
+
+La mire interne du transmetteur DP a été réactivée dans un binaire de référence
+de `36029` octets. Après reset et lancement à `0x140000000`, l'UART a confirmé
+`WDT_DISABLED`, `DP1+0x238_COLORBAR_RB=0x00000001`, `LINK_TRAIN_OK`,
+`DP_MSA_STAGE_OK`, `SCANOUT_STAGE_OK` et `DP_COLORBAR_BLUE_HOLD`. Le bleu est
+visible sur le HP Compaq LA2006x. La liaison physique et le transmetteur sont
+donc validés indépendamment de Saturn ; le prochain essai revient au chemin
+`CMP1`/`layer00`.
+
+## 18 octobre 2026 — correction du registre `solid_area_mode`
+
+Le test Saturn `layer00` reste noir malgré les readbacks corrects. La lecture
+du pilote constructeur `composer_x.h` a localisé une erreur de registre :
+`solid_area_mode` est le bit 16 de `CMP1+0x34`, avec `solid_color_a`, tandis
+que `CMP1+0x38` doit rester à `0x0000FF09` pour activer la couche et sa couleur
+pleine. Le firmware écrivait auparavant le bit 16 dans `CMP1+0x38`, où il
+correspond à `alpha_ratio`.
+
+Le correctif ajoute `0x00010000` à la valeur d'alpha écrite à `CMP1+0x34` et
+conserve `CMP1+0x38=0x0000FF09`. Le binaire est reconstruit dans
+`tftp-root/bonjour-jupiter2.bin` (`40685` octets). Le prochain essai doit
+confirmer `CMP1+0x34_SOLID_A_RB=0x000100FF`.
+
+## 18 octobre 2026 — correction exécutée sur la Jupiter 2
+
+Le binaire `bonjour-jupiter2.bin` (`40685` octets) a été reconstruit et chargé
+par TFTP après reset. Le splash 1600×900 a été transféré à
+`0x102000000` (`5760000` octets), puis l'image a été lancée à
+`0x140000000`. La lecture UART confirme le nouveau placement de
+`solid_area_mode` et l'activation de `layer00` :
+
+```text
+CMP1+0x34_SOLID_A_RB=0x000100FF
+CMP1+0x38_ACTIVE_RB=0x0000FF09
+DPU1+0x348_CFG_READY_RB=0x00000001
+DPU1+0x350_SW_START_RB=0x00000000
+RGB_CYCLE_SOLID_BLUE_OK
+RGB_CYCLE_SOLID_RED_OK
+RGB_CYCLE_SOLID_GREEN_OK
+RGB_CYCLE_DONE
+```
+
+`DP_MSA_STAGE_OK`, `SCANOUT_STAGE_OK` et `WDT_DISABLED` sont également
+confirmés. L'exécution reste stable après le cycle de couleurs. Il reste à
+associer cette trace à l'observation du moniteur avant de déclarer le premier
+affichage Saturn visible.
+
+## 18 octobre 2026 — vérification des champs Saturn HEE
+
+La lecture directe du pilote constructeur public K3 (`dpu_saturn_hee.c` et les
+en-têtes `composer_x.h`, `dpu_scene_ctl.h`, `reg_map_hee.h`, `cmdlist_top.h`)
+a confirmé les champs de scène `timing_inter0` dans `DPU1+0x34C[6:1]` et
+`timing_inter1` dans `[12:7]`. Elle a corrigé l'interprétation de la table :
+`saturn_get_cl_cfg_rdy_addr()` place `CMDLIST_CFG_READY` à `DPU1+0x3F4`
+(`DPU_CTRL_TOP+0x34`), tandis que `DPU1+0x534` est réservé dans la fenêtre
+cmdlist. Les deux bits d'activation du composer 1 sont à `DPU1+0x3E8`
+(`DPU_CTRL_TOP+0x28`), pas `0x3EC`. Ces corrections sont dans
+`firmware/bonjour/src/main.rs`.
+Le pilote `wb_cmdlist()` charge aussi la liste du compositeur sur le canal
+`rdma_nums + 2 + crtc_id` ; avec quatre RDMA et DPU1/CRTC1, le canal correct
+est 7, alors que l'image précédente programmait le canal 0.
+
+La compilation locale est la prochaine validation ; la Jupiter 2 devra ensuite
+être réinitialisée et recevoir le nouveau binaire avant de juger l'affichage.
+
+L'exécution suivante a transféré le binaire corrigé par TFTP et atteint :
+
+```text
+CMDLIST_STAGE_OK
+DPU1+0x3E8_RB=0x00000003
+CMDLIST_ENABLE_OK
+DPU1+0x34C_RB=0x00000411
+DPU_SCENE_STAGE_OK
+CMP1+0x34_SOLID_A_RB=0x000100FF
+CMP1+0x38_ACTIVE_RB=0x0000FF09
+DPU_LAYER_STAGE_OK
+LINK_TRAIN_OK
+DP_MSA_STAGE_OK
+SCANOUT_STAGE_OK
+SATURN_SOLID_BLUE_HOLD
+```
+
+Le firmware reste actif sur la couleur bleue solide Saturn ; la confirmation
+visuelle du moniteur doit maintenant clôturer ce jalon.

@@ -3,13 +3,14 @@
 
 //! Première image V4 chargeable par U-Boot.
 //!
-//! Ce jalon prépare le chemin Saturn jusqu'au timing 1600x900. Le flux vidéo et
-//! la lecture du framebuffer restent désactivés tant que le RDMA, le DMMU et
-//! le lien DP ne sont pas configurés.
+//! Ce jalon prépare le chemin Saturn jusqu'au timing 1600x900. Le test courant
+//! utilise une couche couleur pleine du compositeur afin d'isoler l'émission
+//! DPU/DisplayPort de la lecture DDR par RDMA.
 
 use core::arch::global_asm;
 use core::panic::PanicInfo;
 use core::ptr::{read_volatile, write_volatile};
+use core::sync::atomic::{Ordering, fence};
 
 const UART0_BASE: usize = 0xD401_7000;
 const UART_THR: usize = 0x00;
@@ -20,8 +21,34 @@ const UART_MCR: usize = 0x10;
 const UART_LSR: usize = 0x14;
 const UART_LSR_TDRQ: u32 = 1 << 5;
 
+// U-Boot starts WDT0 before handing control to the bare-metal image. The
+// firmware must take ownership of it, otherwise the 60 s U-Boot timeout
+// resets the board while a display test is running.
+const WDT0_BASE: usize = 0xD401_4000;
+const WDT_TWFAR: usize = 0xB0;
+const WDT_TWSAR: usize = 0xB4;
+const WDT_TWER: usize = 0xB8;
+const WDT_TWFAR_KEY: u32 = 0xBABA;
+const WDT_TWSAR_KEY: u32 = 0xEB10;
+
 const SPLASH_ADDR: usize = 0x1020_0000_0;
 const SPLASH_SIZE: usize = 1600 * 900 * 4;
+const RGB_HOLD_CYCLES: usize = 500_000_000;
+// Keep the first visible test independent of DDR, RDMA and the DMMU. The
+// framebuffer path remains in the source for the next test once the link is
+// proven with the solid composer layer.
+const SATURN_SOLID_TEST: bool = true;
+// Hold the first solid-blue frame while debugging the Saturn path. The RGB
+// cycle remains available for a later visual test once a stable frame exists.
+const SATURN_SOLID_CYCLE_TEST: bool = false;
+// Set this to true only for the known-good blue reference. It bypasses Saturn
+// entirely; false selects the normal Saturn/RDMA stream.
+const DP_COLORBAR_TEST: bool = false;
+// Diagnostic after the first visible gray frame: disable layer00 and make the
+// TMG generate a pure red background. This isolates the output color path
+// from Saturn's layer and command-list data.
+const TMG_BACKGROUND_TEST: bool = false;
+const CMP_BACKGROUND_TEST: bool = true;
 
 // The Pico-ITX device tree routes the active external output through DP1/eDP1
 // and DPU1. The initial probe is read-only. The controlled APMU step below
@@ -55,6 +82,8 @@ const DP_ANA_TX_AUX_CTRL: usize = 0x1D0;
 const DP_ANA_LANE_EMPH: usize = 0x1DC;
 const DP_GENERAL_INTERRUPT: usize = 0x080;
 const DP_GENERAL_INTERRUPT_MASK: usize = 0x084;
+const DP_HPD_INTERRUPT_STATUS: usize = 0x088;
+const DP_HPD_INTERRUPT_ENABLE: usize = 0x08C;
 const DP_AUX_STATUS: usize = 0x400;
 const DP_AUX_CONFIG: usize = 0x404;
 const DP_AUX_START: usize = 0x408;
@@ -103,13 +132,30 @@ const APMU_EDP1_PIXCLK_SEL: u32 = 1 << 18;
 const APMU_DSI4LN2_ESC_CLK_GATE: u32 = 1 << 2;
 const APMU_DSI4LN2_ESC_RESET: u32 = 1 << 3;
 const APMU_DSI4LN2_LCD_RESET: u32 = 1 << 4;
-const APMU_DSI4LN2_LCD_MCLK_GATE: u32 = 1;
+// CTRL4 contains the DSI4LN2 LCD pixel/memory/DSC clock selectors and gates.
+// These fields were previously (incorrectly) ORed into CTRL3, whose low
+// bits belong to the ESC clock.  That changed the ESC source and never
+// enabled the DPU pixel clock explicitly.
 const APMU_DSI4LN2_LCD_PXCLK_GATE: u32 = 1 << 16;
 const APMU_DSI4LN2_LCD_DSC_GATE: u32 = 1 << 14;
+const APMU_DSI4LN2_LCD_MCLK_GATE: u32 = 1;
 const APMU_DSI4LN2_LCD_MCLK_RESET: u32 = 1 << 9;
 const APMU_DSI4LN2_LCD_DSC_RESET: u32 = 1 << 15;
 const APMU_DSI4LN2_DPU_ACLK_RESET: u32 = 1;
 const APMU_DSI4LN2_DPU_ACLK_GATE: u32 = 1 << 1;
+
+// Linux's active DPU1 clock tree on the K3 Pico-ITX is:
+//   PXCLK: PLL2_DIV4 / 5  ~= 108 MHz
+//   MCLK:  614.4 MHz / 2  = 307.2 MHz
+//   ACLK:  409.6 MHz / 1  = 409.6 MHz
+// Keep these field values explicit so bare-metal startup does not depend on
+// whatever partial clock state U-Boot happened to leave behind.
+const APMU_DSI4LN2_LCD_PXCLK_SEL: u32 = 5;
+const APMU_DSI4LN2_LCD_PXCLK_DIV: u32 = 4;
+const APMU_DSI4LN2_LCD_MCLK_SEL: u32 = 2;
+const APMU_DSI4LN2_LCD_MCLK_DIV: u32 = 1;
+const APMU_DSI4LN2_DPU_ACLK_SEL: u32 = 0;
+const APMU_DSI4LN2_DPU_ACLK_DIV: u32 = 0;
 
 const DPU_DMA_TOP_IMAGE_CTRL: usize = 0x1284;
 const DPU_DMA_TOP_TIMEOUT: usize = 0x1288;
@@ -130,12 +176,40 @@ const TMG_VFP_VSYNC: usize = 0x14;
 const TMG_VBP_HACTIVE: usize = 0x18;
 const TMG_VACTIVE: usize = 0x1C;
 const TMG_VSYNC_ALIGN: usize = 0x3C;
+const TMG_BACKGROUND_RG: usize = 0x24;
+const TMG_BACKGROUND_B: usize = 0x28;
 
 const DPU1_RDMA0: usize = 0x1000;
+const DPU1_INT: usize = 0x700;
+const DPU_ONLINE_IRQ_MASK: usize = DPU1_INT + 0x0C;
+const DPU_ONLINE_IRQ_STATUS: usize = DPU1_INT + 0x30;
+// RDMA_PATH_REG index 43..52, from the constructor Saturn register map.
+// These are read-only diagnostics and do not alter the active scanout.
+const RDMA_DBG_IRQ_RAW: usize = DPU1_RDMA0 + 43 * 4;
+const RDMA_DBG_IRQ_MASK: usize = DPU1_RDMA0 + 44 * 4;
+const RDMA_DBG_IRQ_STATUS: usize = DPU1_RDMA0 + 45 * 4;
+const RDMA_DBG_INFO0: usize = DPU1_RDMA0 + 47 * 4;
+const RDMA_DBG_INFO1: usize = DPU1_RDMA0 + 48 * 4;
+const RDMA_DBG_INFO2: usize = DPU1_RDMA0 + 49 * 4;
+const RDMA_DBG_INFO3: usize = DPU1_RDMA0 + 50 * 4;
+const RDMA_DBG_INFO4: usize = DPU1_RDMA0 + 51 * 4;
 const DPU1_CTRL_TOP: usize = 0x3C0;
+// cmdlist_cmps_other_en and cmdlist_cmps_top_en for dev_id=1. Linux enables
+// both bits when it commits the composer cmdlist group.
+// dpu_ctl_top_reg_10[dev_id] contains cmdlist_cmps_other_en and
+// cmdlist_cmps_top_en.  For composer 1 this is register 10, hence +0x28.
+const DPU1_CMDLIST_CMPS: usize = DPU1_CTRL_TOP + 0x28;
 const DPU1_SCENE1: usize = 0x340;
 const DPU1_SCENE1_CMD_UPDATE: usize = DPU1_SCENE1 + 0x04;
 const DPU1_SCENE1_VIDEO_MODE: usize = DPU1_SCENE1 + 0x0C;
+// The Linux driver selects scene-control block 1 for DPU1 through
+// DPU_SCENE_CTL_ADDR(dev_id): 0x300 + 1 * 0x40 = 0x340.  The previous
+// version used the separately named scene-control block 2 at 0x380 for the
+// ready/start handshake; those writes read back but do not start DPU1.
+const DPU1_SCENE_CTL: usize = DPU1_SCENE1;
+const DPU_SCENE_CTL_CONFIG_READY: usize = DPU1_SCENE_CTL + 0x08;
+const DPU_SCENE_CTL_VIDEO_MODE: usize = DPU1_SCENE_CTL + 0x0C;
+const DPU_SCENE_CTL_SW_START: usize = DPU1_SCENE_CTL + 0x10;
 const RDMA_CTRL: usize = 0x00;
 const RDMA_BASE_ADDR0_LOW: usize = 0x24;
 const RDMA_BASE_ADDR0_HIGH: usize = 0x28;
@@ -165,27 +239,63 @@ const DMMU_TBU_CTRL_VALUE: u32 = 0x431; // enable, burst limit, active fetch, ur
 
 const CMDLIST_ADDR: usize = 0x1011_0000_0;
 const CMDLIST_BASE: usize = 0x500;
-const CMDLIST_START_ADDRL: usize = CMDLIST_BASE;
-const CMDLIST_START_ADDRH: usize = CMDLIST_BASE + 0x40;
-const CMDLIST_Y_FIRST: usize = CMDLIST_BASE + 0xC0;
+// wb_cmdlist() uses channel hwdev->rdma_nums + 2 + crtc_id for the online
+// composer list. Saturn HEE has four RDMA channels and DPU1 is CRTC 1, so
+// the composer list is channel 7. Channel 0 belongs to RDMA0.
+const CMDLIST_COMPOSER_CHANNEL: usize = 4 + 2 + 1;
+const CMDLIST_START_ADDRL: usize = CMDLIST_BASE + CMDLIST_COMPOSER_CHANNEL * 4;
+const CMDLIST_START_ADDRH: usize = CMDLIST_BASE + 0x40 + CMDLIST_COMPOSER_CHANNEL * 4;
+const CMDLIST_Y_FIRST: usize = CMDLIST_BASE + 0xC0 + CMDLIST_COMPOSER_CHANNEL * 4;
+// saturn_get_cl_cfg_rdy_addr() returns DPU_CTRL_BASE_ADDR + 0x34.  This is
+// dpu_ctl_top_reg_13, not a register in the cmdlist window: DPU1+0x534 is
+// reserved in cmdlist_top.h.  The final cmdlist row must therefore target
+// DPU1+0x3F4.
 const CMDLIST_CFG_READY_ADDR: usize = DPU1_BASE + 0x3F4;
-const CMDLIST_CFG_BITS: u32 = (1 << 0) | (1 << 21); // RDMA0 + composer1
+const CMDLIST_CFG_BITS: u32 = if SATURN_SOLID_TEST {
+    1 << 21
+} else {
+    (1 << 0) | (1 << 21)
+}; // composer1 or RDMA0 + composer1
 // The Saturn row stores a 12-bit strobe field at bits 19..30. Each register
 // occupies one nibble in that field (0xF, 0xF0, 0xF00).
 const CMDLIST_STROBE_ONE: u32 = 0xF;
 const CMDLIST_STROBE_TWO: u32 = 0xFF;
 const CMDLIST_STROBE_ALL: u32 = 0xFFF;
 // Linux's Saturn cmdlist waits for RDMA reload (wait_event bit 4) and
-// composer reload (wait_event bit 6). The header stores bits 0..4 in the
-// high five bits of the first u64 and the remaining bits in the next u64.
-const CMDLIST_WAIT_EVENT_LOW: u64 = 1u64 << 63;
+// composer reload (wait_event bit 6). A solid-only diagnostic has no RDMA
+// channel, so it must not wait for an event that can never occur. The header
+// stores bits 0..4 in the high five bits of the first u64 and the remaining
+// bits in the next u64.
+const CMDLIST_WAIT_EVENT_LOW: u64 = if SATURN_SOLID_TEST { 0 } else { 1u64 << 63 };
 const CMDLIST_WAIT_EVENT_HIGH: u64 = 1u64 << 1;
 
 const CMP_DST_SIZE: usize = DPU1_COMPOSER1 + 0x04;
 const CMP_BG_ALPHA: usize = DPU1_COMPOSER1 + 0x14;
 const CMP_LAYER0_AREA_X: usize = DPU1_COMPOSER1 + 0x20;
 const CMP_LAYER0_AREA_Y: usize = DPU1_COMPOSER1 + 0x24;
+const CMP_BG_R: usize = DPU1_COMPOSER1 + 0x08;
+const CMP_BG_G: usize = DPU1_COMPOSER1 + 0x0C;
+const CMP_BG_B: usize = DPU1_COMPOSER1 + 0x10;
+const CMP_LAYER0_SOLID_R: usize = DPU1_COMPOSER1 + 0x28;
+const CMP_LAYER0_SOLID_G: usize = DPU1_COMPOSER1 + 0x2C;
+const CMP_LAYER0_SOLID_B: usize = DPU1_COMPOSER1 + 0x30;
+const CMP_LAYER0_SOLID_A: usize = DPU1_COMPOSER1 + 0x34;
 const CMP_LAYER0_CTRL: usize = DPU1_COMPOSER1 + 0x38;
+
+const SOLID_ALPHA: u32 = 0xFF;
+const SOLID_RED: u32 = 0x3FF;
+const SOLID_GREEN: u32 = 0x3FF;
+const SOLID_BLUE: u32 = 0x3FF;
+// composer_x.h places solid_area_mode in register +0x34 next to solid alpha;
+// +0x38 contains only layer enable, blend selection, solid enable, DMA id and
+// alpha.  The previous image put bit 16 in +0x38, where it is alpha_ratio.
+const CMP_LAYER0_SOLID_A_VALUE: u32 = SOLID_ALPHA | (1 << 16);
+const CMP_LAYER0_SOLID_CTRL: u32 = 0x0000_FF09;
+const CMP_LAYER0_TEST_CTRL: u32 = if TMG_BACKGROUND_TEST || CMP_BACKGROUND_TEST {
+    0
+} else {
+    CMP_LAYER0_SOLID_CTRL
+};
 
 // HP Compaq LA2006x: 1600x900@60 DMT timing. The monitor accepts the
 // resolution and refresh rate, but its native timing is the 108 MHz DMT
@@ -205,6 +315,10 @@ const TMG_OUTFMT_RGB888: u32 = 2 << 12;
 // TMG0+0x0C contains split_overlap in bits 9:0 and HFP in bits 27:16.
 // HBP is in TMG0+0x10, so it must not be packed into this register.
 const TMG_HFP_REGISTER_VALUE: u32 = DPU1_MODE_HFP << 16;
+// The K3 Saturn timing enable is bit 0.  0x181 is the value previously
+// observed on the working TMG background test; bit 2 (0x184) leaves the
+// transmitter active but produces black pixels on this DPU revision.
+const TMG_CTRL_ACTIVE: u32 = TMG_CTRL_HSP_VSP | 1;
 
 global_asm!(
     r#"
@@ -291,6 +405,21 @@ impl Uart {
         self.write_str("\n");
     }
 
+    fn disable_inherited_watchdog(&mut self) -> bool {
+        // WDT writes are individually protected by the two access keys. The
+        // documented TWER value 0 stops the counter and clears its value.
+        unsafe {
+            write_volatile((WDT0_BASE + WDT_TWFAR) as *mut u32, WDT_TWFAR_KEY);
+            write_volatile((WDT0_BASE + WDT_TWSAR) as *mut u32, WDT_TWSAR_KEY);
+            write_volatile((WDT0_BASE + WDT_TWER) as *mut u32, 0);
+        }
+        let readback = unsafe { read_volatile((WDT0_BASE + WDT_TWER) as *const u32) };
+        self.write_str("WDT0+0x0B8_RB=");
+        self.write_hex_u32(readback);
+        self.write_str("\n");
+        readback & 1 == 0
+    }
+
     fn or_mmio(&mut self, label: &str, address: usize, mask: u32) -> bool {
         // SAFETY: this is a documented APMU register. The mask contains only
         // clock-gate and reset-deassert bits identified by the K3 Linux
@@ -314,6 +443,18 @@ impl Uart {
         self.write_hex_u32(readback);
         self.write_str("\n");
         readback == value
+    }
+
+    fn write_mmio_command(&mut self, label: &str, address: usize, value: u32) -> bool {
+        // Some Saturn control registers are write strobes: the command is
+        // accepted when written, then the hardware clears it before the
+        // readback. A zero readback is therefore a valid completion state.
+        unsafe { write_volatile(address as *mut u32, value) };
+        let readback = unsafe { read_volatile(address as *const u32) };
+        self.write_str(label);
+        self.write_hex_u32(readback);
+        self.write_str("\n");
+        readback == value || readback == 0
     }
 
     fn write_field(&mut self, address: usize, high: u32, low: u32, value: u32) -> bool {
@@ -419,6 +560,16 @@ impl Uart {
     }
 }
 
+fn fill_framebuffer(color: u32) {
+    let mut address = SPLASH_ADDR as *mut u32;
+    let end = SPLASH_ADDR + SPLASH_SIZE;
+    while (address as usize) < end {
+        unsafe { write_volatile(address, color) };
+        address = unsafe { address.add(1) };
+    }
+    fence(Ordering::SeqCst);
+}
+
 #[panic_handler]
 fn panic(_info: &PanicInfo<'_>) -> ! {
     loop {
@@ -432,6 +583,11 @@ extern "C" fn rust_main() -> ! {
     uart.init();
     uart.write_str("\nBonjour Jupiter 2 V4\n");
     uart.write_str("UART_OK\n");
+    if uart.disable_inherited_watchdog() {
+        uart.write_str("WDT_DISABLED\n");
+    } else {
+        uart.write_str("WDT_DISABLE_READBACK_FAIL\n");
+    }
 
     // The splash is transferred separately by U-Boot. Reading both ends gives
     // a cheap DRAM visibility check before any DPU programming is attempted.
@@ -482,23 +638,55 @@ extern "C" fn rust_main() -> ! {
     uart.write_mmio("APMU+0x274=", APMU_BASE + APMU_LCD_CLK_RES_CTRL5);
     uart.write_str("APMU_PROBE_OK\n");
 
-    // Follow the Linux resource order for the first active step. Pixel-rate
-    // programming and the power-domain protocol remain separate stages.
+    // Follow the Linux resource order.  The selectors/dividers are part of
+    // the APMU clock tree, so setting only the gates is insufficient when the
+    // firmware is started after a different U-Boot display path.
     uart.write_str("APMU_ENABLE_BEGIN\n");
     let ctrl3_ok = uart.or_mmio(
         "APMU+0x26C_RB=",
         APMU_BASE + APMU_LCD_CLK_RES_CTRL3,
-        APMU_DSI4LN2_ESC_CLK_GATE
-            | APMU_DSI4LN2_ESC_RESET
-            | APMU_DSI4LN2_LCD_RESET
-            | APMU_DSI4LN2_LCD_MCLK_GATE
-            | APMU_DSI4LN2_LCD_PXCLK_GATE
-            | APMU_DSI4LN2_LCD_DSC_GATE,
+        APMU_DSI4LN2_ESC_CLK_GATE | APMU_DSI4LN2_ESC_RESET | APMU_DSI4LN2_LCD_RESET,
     );
-    let ctrl4_ok = uart.or_mmio(
+    let ctrl4_gate_reset_ok = uart.or_mmio(
         "APMU+0x270_RB=",
         APMU_BASE + APMU_LCD_CLK_RES_CTRL4,
-        APMU_DSI4LN2_LCD_MCLK_RESET | APMU_DSI4LN2_LCD_DSC_RESET,
+        APMU_DSI4LN2_LCD_PXCLK_GATE
+            | APMU_DSI4LN2_LCD_DSC_GATE
+            | APMU_DSI4LN2_LCD_MCLK_GATE
+            | APMU_DSI4LN2_LCD_MCLK_RESET
+            | APMU_DSI4LN2_LCD_DSC_RESET,
+    );
+    let ctrl4_rate_ok = uart.write_field(
+        APMU_BASE + APMU_LCD_CLK_RES_CTRL4,
+        23,
+        21,
+        APMU_DSI4LN2_LCD_PXCLK_SEL,
+    ) && uart.write_field(
+        APMU_BASE + APMU_LCD_CLK_RES_CTRL4,
+        19,
+        17,
+        APMU_DSI4LN2_LCD_PXCLK_DIV,
+    ) && uart.write_field(
+        APMU_BASE + APMU_LCD_CLK_RES_CTRL4,
+        7,
+        5,
+        APMU_DSI4LN2_LCD_MCLK_SEL,
+    ) && uart.write_field(
+        APMU_BASE + APMU_LCD_CLK_RES_CTRL4,
+        4,
+        1,
+        APMU_DSI4LN2_LCD_MCLK_DIV,
+    );
+    let ctrl5_rate_ok = uart.write_field(
+        APMU_BASE + APMU_LCD_CLK_RES_CTRL5,
+        7,
+        5,
+        APMU_DSI4LN2_DPU_ACLK_SEL,
+    ) && uart.write_field(
+        APMU_BASE + APMU_LCD_CLK_RES_CTRL5,
+        4,
+        2,
+        APMU_DSI4LN2_DPU_ACLK_DIV,
     );
     let ctrl5_ok = uart.or_mmio(
         "APMU+0x274_RB=",
@@ -510,7 +698,9 @@ extern "C" fn rust_main() -> ! {
         APMU_BASE + APMU_LCD_EDP_CTRL,
         APMU_EDP1_RESET | APMU_EDP1_CLK_GATE | APMU_EDP1_PIXCLK_SEL,
     );
-    if ctrl3_ok && ctrl4_ok && ctrl5_ok && edp_ok {
+    uart.write_mmio("APMU+0x270_RATE_RB=", APMU_BASE + APMU_LCD_CLK_RES_CTRL4);
+    uart.write_mmio("APMU+0x274_RATE_RB=", APMU_BASE + APMU_LCD_CLK_RES_CTRL5);
+    if ctrl3_ok && ctrl4_gate_reset_ok && ctrl4_rate_ok && ctrl5_rate_ok && ctrl5_ok && edp_ok {
         uart.write_str("APMU_ENABLE_OK\n");
     } else {
         uart.write_str("APMU_ENABLE_READBACK_FAIL\n");
@@ -543,7 +733,20 @@ extern "C" fn rust_main() -> ! {
     );
     let composer_ok =
         uart.write_mmio_value("DPU1+0x30000_RB=", DPU1_BASE + DPU1_COMPOSER1, 0x0000_0001);
-    if dma_image_ok && dma_timeout_ok && mmu_ctrl_ok && mmu_dmac0_ok && mmu_dmac1_ok && composer_ok
+    let composer_bg_ok = if CMP_BACKGROUND_TEST {
+        uart.write_mmio_value("CMP1+0x08_BG_R_RB=", DPU1_BASE + CMP_BG_R, 0x3FF)
+            && uart.write_mmio_value("CMP1+0x0C_BG_G_RB=", DPU1_BASE + CMP_BG_G, 0)
+            && uart.write_mmio_value("CMP1+0x10_BG_B_RB=", DPU1_BASE + CMP_BG_B, 0)
+    } else {
+        true
+    };
+    if dma_image_ok
+        && dma_timeout_ok
+        && mmu_ctrl_ok
+        && mmu_dmac0_ok
+        && mmu_dmac1_ok
+        && composer_ok
+        && composer_bg_ok
     {
         uart.write_str("DPU_REG_INIT_OK\n");
     } else {
@@ -592,6 +795,15 @@ extern "C" fn rust_main() -> ! {
     );
     let timing_align_ok =
         uart.write_mmio_value("TMG0+0x3C_RB=", DPU1_BASE + DPU1_TMG0 + TMG_VSYNC_ALIGN, 1);
+    let timing_background_ok = uart.write_mmio_value(
+        "TMG0+0x24_BG_RG_RB=",
+        DPU1_BASE + DPU1_TMG0 + TMG_BACKGROUND_RG,
+        if TMG_BACKGROUND_TEST { 0x0000_0FFF } else { 0 },
+    ) && uart.write_mmio_value(
+        "TMG0+0x28_BG_B_RB=",
+        DPU1_BASE + DPU1_TMG0 + TMG_BACKGROUND_B,
+        0,
+    );
     if timing_ctrl_ok
         && timing_user_ok
         && timing_hfp_hbp_ok
@@ -600,6 +812,7 @@ extern "C" fn rust_main() -> ! {
         && timing_vbp_hactive_ok
         && timing_vactive_ok
         && timing_align_ok
+        && timing_background_ok
     {
         uart.write_str("TIMING_STAGE_OK\n");
     } else {
@@ -783,7 +996,7 @@ extern "C" fn rust_main() -> ! {
     uart.write_str("CMDLIST_STAGE_BEGIN\n");
     let mut row_index = 0usize;
     let header_words = (CMDLIST_ADDR as *mut u64, (CMDLIST_ADDR + 8) as *mut u64);
-    let mut rows = [[0u32; 4]; 13];
+    let mut rows = [[0u32; 4]; 17];
     rows[0] = [
         ((DPU1_RDMA0 + RDMA_BASE_ADDR0_LOW) >> 2) as u32 | (CMDLIST_STROBE_TWO << 19),
         DMMU_BASE_VA,
@@ -850,21 +1063,65 @@ extern "C" fn rust_main() -> ! {
         (DPU1_MODE_HEIGHT - 1) << 16,
         0,
     ];
-    // layer00_en=1, alpha selection=pixel alpha, layer alpha=0xff,
-    // solid color disabled, and RDMA0 selected.
-    rows[11] = [
-        (CMP_LAYER0_CTRL >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
-        0x0000_FF03,
-        0,
-        0,
-    ];
-    rows[12] = [
-        ((CMDLIST_CFG_READY_ADDR - DPU1_BASE) >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
-        CMDLIST_CFG_BITS,
-        0,
-        0,
-    ];
-    let row_count = rows.len();
+    let row_count;
+    if SATURN_SOLID_TEST {
+        // The solid layer is generated inside CMP1. It has no RDMA source;
+        // the preceding RDMA/TBU rows stay inert because scene control below
+        // leaves the normal RDMA channels disabled.
+        rows[11] = [
+            (CMP_LAYER0_SOLID_R >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
+            0,
+            0,
+            0,
+        ];
+        rows[12] = [
+            (CMP_LAYER0_SOLID_G >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
+            0,
+            0,
+            0,
+        ];
+        rows[13] = [
+            (CMP_LAYER0_SOLID_B >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
+            SOLID_BLUE,
+            0,
+            0,
+        ];
+        rows[14] = [
+            (CMP_LAYER0_SOLID_A >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
+            CMP_LAYER0_SOLID_A_VALUE,
+            0,
+            0,
+        ];
+        rows[15] = [
+            (CMP_LAYER0_CTRL >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
+            CMP_LAYER0_TEST_CTRL,
+            0,
+            0,
+        ];
+        rows[16] = [
+            ((CMDLIST_CFG_READY_ADDR - DPU1_BASE) >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
+            CMDLIST_CFG_BITS,
+            0,
+            0,
+        ];
+        row_count = 17;
+    } else {
+        // layer00_en=1, alpha selection=pixel alpha, layer alpha=0xff,
+        // solid color disabled, and RDMA0 selected.
+        rows[11] = [
+            (CMP_LAYER0_CTRL >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
+            0x0000_FF03,
+            0,
+            0,
+        ];
+        rows[12] = [
+            ((CMDLIST_CFG_READY_ADDR - DPU1_BASE) >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
+            CMDLIST_CFG_BITS,
+            0,
+            0,
+        ];
+        row_count = 13;
+    }
     let header0 = ((row_count as u64 + 1) << 40)
         | (1u64 << 56)
         | CMDLIST_WAIT_EVENT_LOW
@@ -900,16 +1157,16 @@ extern "C" fn rust_main() -> ! {
     uart.write_hex_u32(cmd_last_row);
     uart.write_str("\n");
     let cmdlist_start_low_ok = uart.write_mmio_value(
-        "CMDLIST0+0x00_RB=",
+        "CMDLIST7+0x1C_RB=",
         DPU1_BASE + CMDLIST_START_ADDRL,
         ((CMDLIST_ADDR >> 4) as u32) & 0x0FFF_FFFF,
     );
     let cmdlist_start_high_ok = uart.write_mmio_value(
-        "CMDLIST0+0x40_RB=",
+        "CMDLIST7+0x5C_RB=",
         DPU1_BASE + CMDLIST_START_ADDRH,
         (CMDLIST_ADDR >> 32) as u32,
     );
-    let cmdlist_y_ok = uart.write_mmio_value("CMDLIST0+0xC0_RB=", DPU1_BASE + CMDLIST_Y_FIRST, 0);
+    let cmdlist_y_ok = uart.write_mmio_value("CMDLIST7+0xDC_RB=", DPU1_BASE + CMDLIST_Y_FIRST, 0);
     let cmdlist_stage_ok = cmd_header == header0
         && cmd_last_row & (1 << 31) != 0
         && cmdlist_start_low_ok
@@ -926,22 +1183,111 @@ extern "C" fn rust_main() -> ! {
     // remains quiescent.
     if cmdlist_stage_ok {
         uart.write_str("CMDLIST_ENABLE_BEGIN\n");
-        let cmdlist_channel_ok =
-            uart.write_mmio_value("DPU1+0x3C0_RB=", DPU1_BASE + DPU1_CTRL_TOP, 1);
-        let scene_route_ok = uart.write_mmio_value(
-            "DPU1+0x340_RB=",
-            DPU1_BASE + DPU1_SCENE1,
-            (1 << 0) | (1 << 16) | (2 << 20),
+        // A solid composer layer has no RDMA channel, but its composer
+        // cmdlist still has to be enabled so the staged composer rows are
+        // consumed. The Linux driver enables both composer bits at reg 10.
+        let cmdlist_channel_ok = uart.write_mmio_value(
+            "DPU1+0x3C0_RB=",
+            DPU1_BASE + DPU1_CTRL_TOP,
+            if SATURN_SOLID_TEST { 0 } else { 1 },
         );
+        let cmdlist_composer_ok =
+            uart.write_mmio_value("DPU1+0x3E8_RB=", DPU1_BASE + DPU1_CMDLIST_CMPS, 0x3);
+        // Match saturn_hee_conf_dpuctrl(): only the active RDMA mask,
+        // nml_outctl_en and nml_frm_timing_en belong in this register.
+        // The previous literal also enabled writeback and DSC bits, which
+        // left the output black even though the timing generator was active.
+        let scene_route_value = (if SATURN_SOLID_TEST { 0 } else { 1 }) | (1 << 18) | (2 << 23);
+        let scene_route_ok =
+            uart.write_mmio_value("DPU1+0x340_RB=", DPU1_BASE + DPU1_SCENE1, scene_route_value);
         let scene_update_ok =
             uart.write_mmio_value("DPU1+0x344_RB=", DPU1_BASE + DPU1_SCENE1_CMD_UPDATE, 1);
         let scene_video_ok =
             uart.write_mmio_value("DPU1+0x34C_RB=", DPU1_BASE + DPU1_SCENE1_VIDEO_MODE, 1);
-        if cmdlist_channel_ok && scene_route_ok && scene_update_ok && scene_video_ok {
+        if cmdlist_channel_ok
+            && cmdlist_composer_ok
+            && scene_route_ok
+            && scene_update_ok
+            && scene_video_ok
+        {
             uart.write_str("CMDLIST_ENABLE_OK\n");
         } else {
             uart.write_str("CMDLIST_ENABLE_READBACK_FAIL\n");
         }
+    }
+
+    // Arm the DPU1 normal path.  The command-list channel and scene routing
+    // above are not sufficient on Saturn: Linux also enables the RDMA path,
+    // output control and frame-timing state machine in scene control 2.
+    uart.write_str("DPU_SCENE_STAGE_BEGIN\n");
+    let scene_rch_ok = uart.write_field(
+        DPU1_BASE + DPU1_SCENE_CTL,
+        9,
+        0,
+        if SATURN_SOLID_TEST { 0 } else { 1 },
+    );
+    let scene_outctl_ok = uart.write_field(DPU1_BASE + DPU1_SCENE_CTL, 18, 18, 1);
+    let scene_frm_timing_ok = uart.write_field(DPU1_BASE + DPU1_SCENE_CTL, 25, 23, 2);
+    let scene_video_ok = uart.write_field(DPU1_BASE + DPU_SCENE_CTL_VIDEO_MODE, 0, 0, 1);
+    // dpu_scene_ctl.h: video_mod bit 0, timing_inter0 bits 1:6 and
+    // timing_inter1 bits 7:12. The former code shifted both fields by one
+    // bit, yielding 0x821 instead of the Linux value 0x411.
+    let scene_inter0_ok = uart.write_field(DPU1_BASE + DPU_SCENE_CTL_VIDEO_MODE, 6, 1, 8);
+    let scene_inter1_ok = uart.write_field(DPU1_BASE + DPU_SCENE_CTL_VIDEO_MODE, 12, 7, 8);
+    uart.write_mmio("DPU1+0x340_RB=", DPU1_BASE + DPU1_SCENE_CTL);
+    uart.write_mmio("DPU1+0x34C_RB=", DPU1_BASE + DPU_SCENE_CTL_VIDEO_MODE);
+    if scene_rch_ok
+        && scene_outctl_ok
+        && scene_frm_timing_ok
+        && scene_video_ok
+        && scene_inter0_ok
+        && scene_inter1_ok
+    {
+        uart.write_str("DPU_SCENE_STAGE_OK\n");
+    } else {
+        uart.write_str("DPU_SCENE_STAGE_READBACK_FAIL\n");
+    }
+
+    // Prime layer00 directly as well as through the cmdlist. In the solid
+    // test this makes the first visible color independent of a DDR fetch:
+    // RGB are 10-bit composer values and alpha is 8-bit.
+    let cmp_solid_ok = if SATURN_SOLID_TEST {
+        uart.write_str("SATURN_SOLID_TEST_BEGIN\n");
+        let r_ok =
+            uart.write_mmio_value("CMP1+0x28_SOLID_R_RB=", DPU1_BASE + CMP_LAYER0_SOLID_R, 0);
+        let g_ok =
+            uart.write_mmio_value("CMP1+0x2C_SOLID_G_RB=", DPU1_BASE + CMP_LAYER0_SOLID_G, 0);
+        let b_ok = uart.write_mmio_value(
+            "CMP1+0x30_SOLID_B_RB=",
+            DPU1_BASE + CMP_LAYER0_SOLID_B,
+            SOLID_BLUE,
+        );
+        let a_ok = uart.write_mmio_value(
+            "CMP1+0x34_SOLID_A_RB=",
+            DPU1_BASE + CMP_LAYER0_SOLID_A,
+            CMP_LAYER0_SOLID_A_VALUE,
+        );
+        r_ok && g_ok && b_ok && a_ok
+    } else {
+        true
+    };
+
+    // The Linux plane commit enables composer layer 0 through its cmdlist.
+    // Solid mode sets bit 3 and keeps the layer alpha at 0xff; framebuffer
+    // mode selects RDMA0 and uses the historical 0x0000FF03 value.
+    let cmp_layer_active_ok = uart.write_mmio_value(
+        "CMP1+0x38_ACTIVE_RB=",
+        DPU1_BASE + CMP_LAYER0_CTRL,
+        if SATURN_SOLID_TEST {
+            CMP_LAYER0_TEST_CTRL
+        } else {
+            0x0000_FF03
+        },
+    );
+    if cmp_solid_ok && cmp_layer_active_ok {
+        uart.write_str("DPU_LAYER_STAGE_OK\n");
+    } else {
+        uart.write_str("DPU_LAYER_STAGE_READBACK_FAIL\n");
     }
 
     uart.write_str("AUX_AFTER_DPU_BEGIN\n");
@@ -1002,6 +1348,17 @@ extern "C" fn rust_main() -> ! {
             0,
         );
         uart.delay(50_000);
+
+        // The DP core-control fields are reset by DP_SOFT_RESET on this
+        // transmitter.  Reapply the Linux soc_dp_dev_init() settings after
+        // releasing reset, otherwise enhanced framing can silently be lost
+        // while AUX/link training still appears healthy.
+        dp_ok &= uart.write_field(DP1_BASE + DP_CORE_CONTROL, 4, 4, 0);
+        dp_ok &= uart.write_field(DP1_BASE + DP_CORE_CONTROL, 31, 31, 0);
+        dp_ok &= uart.write_field(DP1_BASE + DP_CORE_CONTROL, 30, 30, 1);
+        dp_ok &= uart.write_field(DP1_BASE + DP_CORE_CONTROL, 29, 29, 0);
+        dp_ok &= uart.write_field(DP1_BASE + DP_CORE_CONTROL, 28, 28, 0);
+        uart.write_mmio("DP1+0x018_CORE_RB=", DP1_BASE + DP_CORE_CONTROL);
 
         // Core PLL: Linux's RBR setup at 1.62 Gb/s.
         dp_ok &= uart.write_field(DP1_BASE + DP_MPLL_CTRL0, 31, 24, 0x87);
@@ -1291,11 +1648,15 @@ extern "C" fn rust_main() -> ! {
                 msa_ok &= uart.write_field(DP1_BASE + DP_VIDEO_CONFIG5, 24, 21, tu_frac);
                 msa_ok &= uart.write_field(DP1_BASE + DP_VIDEO_CONFIG5, 18, 10, 16);
                 msa_ok &= uart.write_field(DP1_BASE + DP_PHYIF_CTRL, 8, 8, 1);
-                // Diagnostic pass: use the transmitter's internal colorbar.
-                // If the monitor still reports no signal with this enabled,
-                // the failure is below Saturn/RDMA and is in the DP stream,
-                // clocking, or physical output path.
-                msa_ok &= uart.write_field(DP1_BASE + DP_VIDEO_COLORBAR_CFG, 0, 0, 1);
+                // Use the normal stream. The framebuffer is changed below to
+                // cycle blue, red and green through the real Saturn/RDMA path.
+                uart.write_str("DP_COLORBAR_TEST_BEGIN\n");
+                msa_ok &= uart.write_field(
+                    DP1_BASE + DP_VIDEO_COLORBAR_CFG,
+                    0,
+                    0,
+                    if DP_COLORBAR_TEST { 1 } else { 0 },
+                );
                 // Keep the external DP path in the normal DP stream mode.
                 // STREAM_ENC_EN is only used by the eDP branch in Linux.
                 msa_ok &= uart.write_field(
@@ -1311,16 +1672,137 @@ extern "C" fn rust_main() -> ! {
                 let timing_enable_ok = uart.write_mmio_value(
                     "TMG0+0x00_ACTIVE_RB=",
                     DPU1_BASE + DPU1_TMG0 + TMG_CTRL,
-                    0x181,
+                    TMG_CTRL_ACTIVE,
+                );
+                // Match saturn_hee_cfg_ready() and saturn_hee_sw_start().
+                // The command-list CFG_RDY row arms the channel, while this
+                // scene-control handshake releases the normal DPU frame.
+                let scene_cfg_ready_ok = uart.write_mmio_value(
+                    "DPU1+0x348_CFG_READY_RB=",
+                    DPU1_BASE + DPU_SCENE_CTL_CONFIG_READY,
+                    1,
+                );
+                let scene_sw_start_ok = uart.write_mmio_command(
+                    "DPU1+0x350_SW_START_RB=",
+                    DPU1_BASE + DPU_SCENE_CTL_SW_START,
+                    1,
                 );
                 let mut post_status = [0u8; 6];
                 let _post_status_ok = uart.dp_aux_read(0x0202, &mut post_status);
                 uart.write_str("LINK_POST_STATUS=");
                 uart.write_hex_u32(u32::from(post_status[0]));
                 uart.write_str("\n");
-                if msa_ok && timing_enable_ok {
+                if msa_ok
+                    && timing_enable_ok
+                    && scene_cfg_ready_ok
+                    && scene_sw_start_ok
+                    && cmp_layer_active_ok
+                {
                     uart.write_str("DP_MSA_STAGE_OK\n");
                     uart.write_str("SCANOUT_STAGE_OK\n");
+                    uart.write_str("SCANOUT_DIAG_BEGIN\n");
+                    uart.write_mmio("DP1+0x018_CORE_ACTIVE_RB=", DP1_BASE + DP_CORE_CONTROL);
+                    uart.write_mmio("DP1+0x088_HPD_RB=", DP1_BASE + DP_HPD_INTERRUPT_STATUS);
+                    uart.write_mmio("DP1+0x080_GENERAL_INT_RB=", DP1_BASE + DP_GENERAL_INTERRUPT);
+                    uart.write_mmio(
+                        "DP1+0x084_GENERAL_MASK_RB=",
+                        DP1_BASE + DP_GENERAL_INTERRUPT_MASK,
+                    );
+                    uart.write_mmio(
+                        "DP1+0x08C_HPD_ENABLE_RB=",
+                        DP1_BASE + DP_HPD_INTERRUPT_ENABLE,
+                    );
+                    uart.write_mmio("DPU1+0x70C_IRQ_MASK=", DPU1_BASE + DPU_ONLINE_IRQ_MASK);
+                    uart.write_mmio("DPU1+0x730_IRQ_STATUS=", DPU1_BASE + DPU_ONLINE_IRQ_STATUS);
+                    uart.write_mmio("RDMA0+0xAC_DBG_RAW=", DPU1_BASE + RDMA_DBG_IRQ_RAW);
+                    uart.write_mmio("RDMA0+0xB0_DBG_MASK=", DPU1_BASE + RDMA_DBG_IRQ_MASK);
+                    uart.write_mmio("RDMA0+0xB4_DBG_STATUS=", DPU1_BASE + RDMA_DBG_IRQ_STATUS);
+                    uart.write_mmio("RDMA0+0xBC_DBG_INFO0=", DPU1_BASE + RDMA_DBG_INFO0);
+                    uart.write_mmio("RDMA0+0xC0_DBG_INFO1=", DPU1_BASE + RDMA_DBG_INFO1);
+                    uart.write_mmio("RDMA0+0xC4_DBG_INFO2=", DPU1_BASE + RDMA_DBG_INFO2);
+                    uart.write_mmio("RDMA0+0xC8_DBG_INFO3=", DPU1_BASE + RDMA_DBG_INFO3);
+                    uart.write_mmio("RDMA0+0xCC_DBG_INFO4=", DPU1_BASE + RDMA_DBG_INFO4);
+                    uart.write_str("SCANOUT_DIAG_OK\n");
+
+                    uart.write_str("RGB_CYCLE_BEGIN\n");
+                    if DP_COLORBAR_TEST {
+                        // Keep the known-good transmitter blue. This is the
+                        // repeatability test for the physical display path.
+                        uart.write_str("DP_COLORBAR_BLUE_HOLD\n");
+                        loop {
+                            unsafe { core::arch::asm!("wfi") };
+                        }
+                    } else if TMG_BACKGROUND_TEST {
+                        uart.write_str("TMG_BACKGROUND_RED_HOLD\n");
+                        loop {
+                            unsafe { core::arch::asm!("wfi") };
+                        }
+                    } else if CMP_BACKGROUND_TEST {
+                        uart.write_str("CMP_BACKGROUND_RED_HOLD\n");
+                        loop {
+                            unsafe { core::arch::asm!("wfi") };
+                        }
+                    } else if SATURN_SOLID_TEST {
+                        if SATURN_SOLID_CYCLE_TEST {
+                            // Change only CMP1's solid color. No DDR write or
+                            // RDMA transaction is involved in this diagnostic.
+                            for (label, red, green, blue) in [
+                                ("BLUE", 0, 0, SOLID_BLUE),
+                                ("RED", SOLID_RED, 0, 0),
+                                ("GREEN", 0, SOLID_GREEN, 0),
+                            ] {
+                                let color_ok = uart.write_mmio_value(
+                                    "CMP1+0x28_SOLID_R_RB=",
+                                    DPU1_BASE + CMP_LAYER0_SOLID_R,
+                                    red,
+                                ) && uart.write_mmio_value(
+                                    "CMP1+0x2C_SOLID_G_RB=",
+                                    DPU1_BASE + CMP_LAYER0_SOLID_G,
+                                    green,
+                                ) && uart.write_mmio_value(
+                                    "CMP1+0x30_SOLID_B_RB=",
+                                    DPU1_BASE + CMP_LAYER0_SOLID_B,
+                                    blue,
+                                );
+                                let cfg_ok = uart.write_mmio_value(
+                                    "DPU1+0x348_COLOR_CFG_RB=",
+                                    DPU1_BASE + DPU_SCENE_CTL_CONFIG_READY,
+                                    1,
+                                );
+                                let start_ok = uart.write_mmio_command(
+                                    "DPU1+0x350_COLOR_START_RB=",
+                                    DPU1_BASE + DPU_SCENE_CTL_SW_START,
+                                    1,
+                                );
+                                uart.write_str("RGB_CYCLE_SOLID_");
+                                uart.write_str(label);
+                                uart.write_str(if color_ok && cfg_ok && start_ok {
+                                    "_OK\n"
+                                } else {
+                                    "_READBACK_FAIL\n"
+                                });
+                                uart.delay(RGB_HOLD_CYCLES);
+                            }
+                        } else {
+                            uart.write_str("SATURN_SOLID_BLUE_HOLD\n");
+                            loop {
+                                unsafe { core::arch::asm!("wfi") };
+                            }
+                        }
+                    } else {
+                        for (label, color) in [
+                            ("BLUE", 0xFF00_00FF),
+                            ("RED", 0xFFFF_0000),
+                            ("GREEN", 0xFF00_FF00),
+                        ] {
+                            fill_framebuffer(color);
+                            uart.write_str("RGB_CYCLE_");
+                            uart.write_str(label);
+                            uart.write_str("\n");
+                            uart.delay(RGB_HOLD_CYCLES);
+                        }
+                    }
+                    uart.write_str("RGB_CYCLE_DONE\n");
                 } else {
                     uart.write_str("DP_MSA_STAGE_READBACK_FAIL\n");
                 }
