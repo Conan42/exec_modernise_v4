@@ -1640,3 +1640,50 @@ tandis que les valeurs effectives de `CMP1` restent présentes. Le lien DP est
 validé (`LINK_TRAIN_OK`) et aucune IRQ d'erreur DPU/RDMA n'est signalée. Cette
 exécution constitue le test Saturn bleu correct ; il reste à confirmer la
 couleur observée sur le HP Compaq LA2006x.
+
+## 18 octobre 2026 — instrumentation explicite du test Saturn direct
+
+Le firmware a ensuite été recompilé avec des marqueurs UART qui indiquent
+directement le chemin actif. Le binaire chargé par TFTP contient `36501` octets.
+Après le reset, la trace a fourni :
+
+```text
+SATURN_SOLID_TEST_BEGIN
+SATURN_MODE=SOLID_DIRECT
+SATURN_RDMA_SOURCE=DISABLED
+SATURN_SOLID_RGB10=0,0,1023
+SATURN_SOLID_A_CFG=0x00000000
+CMP1+0x28_SOLID_R_RB=0x00000000
+CMP1+0x2C_SOLID_G_RB=0x00000000
+CMP1+0x30_SOLID_B_RB=0x000003FF
+CMP1+0x34_SOLID_A_RB=0x000000FF
+CMP1+0x38_ACTIVE_RB=0x0000FF09
+DPU_LAYER_STAGE_OK
+```
+
+Dans cette variante, `SATURN_SOLID_DIRECT_TEST` vaut `true`. Le canal RDMA
+reste désactivé et le registre de cmdlist compositeur est explicitement mis à
+zéro :
+
+```text
+DPU1+0x3C0_RB=0x00000000
+DPU1+0x3E8_RB=0x00000000
+RDMA0+0xB4_POST_RB=0x00000000
+```
+
+La suite de contrôle DP atteint toujours le commit et le maintien final :
+
+```text
+LINK_TRAIN_OK
+DPU_POST_COMMIT_END
+DP_MSA_STAGE_OK
+SCANOUT_STAGE_OK
+SATURN_SOLID_BLUE_HOLD
+```
+
+`AUX_AFTER_PLL_FAIL` reste un échec de lecture intermédiaire immédiatement
+suivi par la séquence AUX normale (`AUX_STAGE_OK`), puis par
+`LINK_TRAIN_OK`. Aucun défaut DPU/RDMA n'est signalé dans cette exécution.
+Cette trace isole donc le prochain contrôle à effectuer : vérifier la couleur
+réellement reçue par le moniteur, puis comparer avec une variante où la cmdlist
+Saturn est réactivée. Le splash BGRA reste hors de ce test minimal.

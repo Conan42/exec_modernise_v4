@@ -41,6 +41,10 @@ const SATURN_SOLID_TEST: bool = true;
 // Hold the first solid-blue frame while debugging the Saturn path. The RGB
 // cycle remains available for a later visual test once a stable frame exists.
 const SATURN_SOLID_CYCLE_TEST: bool = false;
+// First isolate the direct CMP1 layer writes from the Saturn composer cmdlist.
+// The Linux path uses the cmdlist, but a direct-only pass tells us whether the
+// no-signal symptom is caused by list execution or by the solid layer itself.
+const SATURN_SOLID_DIRECT_TEST: bool = true;
 // Set this to true only for the known-good blue reference. It bypasses Saturn
 // entirely; false selects the normal Saturn/RDMA stream.
 const DP_COLORBAR_TEST: bool = false;
@@ -251,7 +255,9 @@ const CMDLIST_Y_FIRST: usize = CMDLIST_BASE + 0xC0 + CMDLIST_COMPOSER_CHANNEL * 
 // reserved in cmdlist_top.h.  The final cmdlist row must therefore target
 // DPU1+0x3F4.
 const CMDLIST_CFG_READY_ADDR: usize = DPU1_BASE + 0x3F4;
-const CMDLIST_CFG_BITS: u32 = if SATURN_SOLID_TEST {
+const CMDLIST_CFG_BITS: u32 = if SATURN_SOLID_TEST && SATURN_SOLID_DIRECT_TEST {
+    0
+} else if SATURN_SOLID_TEST {
     1 << 21
 } else {
     (1 << 0) | (1 << 21)
@@ -286,10 +292,10 @@ const SOLID_ALPHA: u32 = 0xFF;
 const SOLID_RED: u32 = 0x3FF;
 const SOLID_GREEN: u32 = 0x3FF;
 const SOLID_BLUE: u32 = 0x3FF;
-// composer_x.h places solid_area_mode in register +0x34 next to solid alpha;
-// +0x38 contains only layer enable, blend selection, solid enable, DMA id and
-// alpha.  The previous image put bit 16 in +0x38, where it is alpha_ratio.
-const CMP_LAYER0_SOLID_A_VALUE: u32 = SOLID_ALPHA | (1 << 16);
+// The constructor's HEE driver writes only solid_color_a here. It leaves the
+// adjacent solid_area_mode bit at its reset value; forcing that bit changes
+// the active stream on this board, so keep the exact driver value.
+const CMP_LAYER0_SOLID_A_VALUE: u32 = SOLID_ALPHA;
 const CMP_LAYER0_SOLID_CTRL: u32 = 0x0000_FF09;
 const CMP_LAYER0_TEST_CTRL: u32 = if TMG_BACKGROUND_TEST || CMP_BACKGROUND_TEST {
     0
@@ -1191,8 +1197,15 @@ extern "C" fn rust_main() -> ! {
             DPU1_BASE + DPU1_CTRL_TOP,
             if SATURN_SOLID_TEST { 0 } else { 1 },
         );
-        let cmdlist_composer_ok =
-            uart.write_mmio_value("DPU1+0x3E8_RB=", DPU1_BASE + DPU1_CMDLIST_CMPS, 0x3);
+        let cmdlist_composer_ok = uart.write_mmio_value(
+            "DPU1+0x3E8_RB=",
+            DPU1_BASE + DPU1_CMDLIST_CMPS,
+            if SATURN_SOLID_TEST && SATURN_SOLID_DIRECT_TEST {
+                0
+            } else {
+                0x3
+            },
+        );
         // Match saturn_hee_conf_dpuctrl(): only the active RDMA mask,
         // nml_outctl_en and nml_frm_timing_en belong in this register.
         // The previous literal also enabled writeback and DSC bits, which
@@ -1253,6 +1266,14 @@ extern "C" fn rust_main() -> ! {
     // RGB are 10-bit composer values and alpha is 8-bit.
     let cmp_solid_ok = if SATURN_SOLID_TEST {
         uart.write_str("SATURN_SOLID_TEST_BEGIN\n");
+        uart.write_str(if SATURN_SOLID_DIRECT_TEST {
+            "SATURN_MODE=SOLID_DIRECT\n"
+        } else {
+            "SATURN_MODE=SOLID_CMDLIST\n"
+        });
+        uart.write_str("SATURN_RDMA_SOURCE=DISABLED\n");
+        uart.write_str("SATURN_SOLID_RGB10=0,0,1023\n");
+        uart.write_mmio("SATURN_SOLID_A_CFG=", DPU1_BASE + CMP_LAYER0_SOLID_A);
         let r_ok =
             uart.write_mmio_value("CMP1+0x28_SOLID_R_RB=", DPU1_BASE + CMP_LAYER0_SOLID_R, 0);
         let g_ok =

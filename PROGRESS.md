@@ -888,3 +888,42 @@ Le commit post-scène conserve `CMP1+0x38=0x0000FF09`, `CMP1+0x34=0x000100FF`
 et `CMP1+0x30=0x000003FF`; le watchdog est désactivé et le lien DP est
 entraîné (`LINK_TRAIN_OK`). La confirmation visuelle de l'écran reste à
 associer à cette exécution matérielle.
+
+## 18 octobre 2026 — test Saturn direct instrumenté et relancé
+
+Le firmware a été recompilé après ajout de marqueurs explicites dans l'UART,
+puis transféré par TFTP à `0x140000000` (`36501` octets). Après le reset, la
+trace a confirmé le mode exact du test :
+
+```text
+SATURN_SOLID_TEST_BEGIN
+SATURN_MODE=SOLID_DIRECT
+SATURN_RDMA_SOURCE=DISABLED
+SATURN_SOLID_RGB10=0,0,1023
+SATURN_SOLID_A_CFG=0x00000000
+CMP1+0x28_SOLID_R_RB=0x00000000
+CMP1+0x2C_SOLID_G_RB=0x00000000
+CMP1+0x30_SOLID_B_RB=0x000003FF
+CMP1+0x34_SOLID_A_RB=0x000000FF
+CMP1+0x38_ACTIVE_RB=0x0000FF09
+DPU_LAYER_STAGE_OK
+```
+
+La cmdlist compositeur et le chemin RDMA ont bien été isolés :
+`DPU1+0x3E8_RB=0x00000000`, `RDMA0+0xB4_POST_RB=0x00000000` et aucune IRQ
+d'erreur DPU/RDMA n'est signalée. Le lien physique et le commit de scène
+aboutissent également :
+
+```text
+LINK_TRAIN_OK
+DPU_POST_COMMIT_END
+DP_MSA_STAGE_OK
+SCANOUT_STAGE_OK
+SATURN_SOLID_BLUE_HOLD
+```
+
+`AUX_AFTER_PLL_FAIL` apparaît encore comme diagnostic intermédiaire, mais la
+séquence AUX de récupération atteint ensuite `AUX_STAGE_OK` et
+`LINK_TRAIN_OK`. Cette exécution prouve le chemin de contrôle jusqu'au maintien
+du bleu solide ; la couleur effectivement observée sur le moniteur doit encore
+être associée à cette trace. Le splash BGRA n'est pas activé dans ce test.
