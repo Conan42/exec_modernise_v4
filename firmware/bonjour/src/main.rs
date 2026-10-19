@@ -34,22 +34,29 @@ const WDT_TWSAR_KEY: u32 = 0xEB10;
 const SPLASH_ADDR: usize = 0x1020_0000_0;
 const SPLASH_SIZE: usize = 1600 * 900 * 4;
 const RGB_HOLD_CYCLES: usize = 500_000_000;
-// Keep the first visible test independent of DDR, RDMA and the DMMU. The
-// framebuffer path remains in the source for the next test once the link is
-// proven with the solid composer layer.
-const SATURN_SOLID_TEST: bool = true;
+// First isolate CMP1 from RDMA/DMMU with a solid blue layer. Once this is
+// visible, the same scene can be reused for the framebuffer path.
+const SATURN_SOLID_TEST: bool = false;
 // Hold the first solid-blue frame while debugging the Saturn path. The RGB
 // cycle remains available for a later visual test once a stable frame exists.
 const SATURN_SOLID_CYCLE_TEST: bool = false;
 // The HEE composer commits layer registers through its cmdlist. Direct MMIO
-// readbacks alone do not make a scene active, so keep the constructor's
-// composer cmdlist enabled for the visible solid-color test.
+// readbacks alone do not make a scene active, so use the constructor's
+// composer cmdlist for the visible solid-color test.
 const SATURN_SOLID_DIRECT_TEST: bool = false;
+// Diagnostic isolating the DMMU from the pixel path. The direct RDMA test is
+// re-enabled only after the solid CMP1 path is visible.
+const RDMA_PHYS_DIRECT_TEST: bool = true;
+// The constructor's cmdlist row for POSTPIPE+0x34 is still read back as zero
+// on this board. Write the same active dimensions directly before CFG_READY
+// to distinguish a bad cmdlist row from an inactive/wrong POSTPIPE window.
+// This is a temporary diagnostic and is disabled once the path is understood.
+const POSTPIPE_DIRECT_TEST: bool = true;
 // Set this to true only for the known-good blue reference. It bypasses Saturn
-// entirely; false selects the normal Saturn/RDMA stream.
-// Reference-only test: bypass the DPU pixel stream and generate the
-// transmitter's internal blue colorbar.
-const DP_COLORBAR_TEST: bool = true;
+// entirely; false selects the normal Saturn/RDMA stream. The reference has
+// already validated the physical DP path, so the bring-up image now tests
+// the actual DPU pixel path again.
+const DP_COLORBAR_TEST: bool = false;
 // Diagnostic after the first visible gray frame: disable layer00 and make the
 // TMG generate a pure red background. This isolates the output color path
 // from Saturn's layer and command-list data.
@@ -170,6 +177,12 @@ const DPU_MMU_TOP_DMAC0_OUTS: usize = 0x1208;
 const DPU_MMU_TOP_DMAC1_OUTS: usize = 0x120C;
 // Linux maps dev_id=1 to CMP1_BASE_ADDR = 0x30000.
 const DPU1_COMPOSER1: usize = 0x30000;
+// Linux configures the postpipe for every online commit, including the
+// no-post-scaler case. Without these two composer-cmdlist rows, CMP1 can
+// accept the layer values while the normal pixel path remains black.
+const DPU1_POSTPIPE: usize = DPU1_COMPOSER1 + 0x300;
+const POSTPIPE_CTRL: usize = DPU1_POSTPIPE;
+const POSTPIPE_SIZE: usize = DPU1_POSTPIPE + 0x34;
 // Linux maps pipeline 1 to TMG0_BASE_ADDR = 0x51200.  The output timing
 // block is deliberately staged with fm_timing_en=0 until the RDMA/DMMU and
 // DP link have been configured.
@@ -181,6 +194,8 @@ const TMG_HSYNC_HBP: usize = 0x10;
 const TMG_VFP_VSYNC: usize = 0x14;
 const TMG_VBP_HACTIVE: usize = 0x18;
 const TMG_VACTIVE: usize = 0x1C;
+const TMG_EOF_LINE_DELAY: usize = 0x2C;
+const TMG_SOF_PRE_LINE: usize = 0x38;
 const TMG_VSYNC_ALIGN: usize = 0x3C;
 const TMG_BACKGROUND_RG: usize = 0x24;
 const TMG_BACKGROUND_B: usize = 0x28;
@@ -250,16 +265,26 @@ const DMMU_TBU_SIZE0: usize = 0x28;
 const DMMU_TBU_VSYNC: usize = 0x34;
 const DMMU_BASE_VA: u32 = 0x1000_0000;
 const DMMU_TBU_CTRL_VALUE: u32 = 0x431; // enable, burst limit, active fetch, urgent QoS
+const DMMU_TBU_CTRL_DIRECT_VALUE: u32 = 0;
 
+// Linux keeps the plane list on the RDMA channel and the CRTC list on the
+// composer channel. The two buffers are separate so the HEE parser cannot
+// apply RDMA rows as if they belonged to CMP1.
 const CMDLIST_ADDR: usize = 0x1011_0000_0;
+const CMDLIST_CRTC_ADDR: usize = 0x1011_1000_0;
 const CMDLIST_BASE: usize = 0x500;
 // wb_cmdlist() uses channel hwdev->rdma_nums + 2 + crtc_id for the online
 // composer list. Saturn HEE has four RDMA channels and DPU1 is CRTC 1, so
 // the composer list is channel 7. Channel 0 belongs to RDMA0.
 const CMDLIST_COMPOSER_CHANNEL: usize = 4 + 2 + 1;
-const CMDLIST_START_ADDRL: usize = CMDLIST_BASE + CMDLIST_COMPOSER_CHANNEL * 4;
-const CMDLIST_START_ADDRH: usize = CMDLIST_BASE + 0x40 + CMDLIST_COMPOSER_CHANNEL * 4;
-const CMDLIST_Y_FIRST: usize = CMDLIST_BASE + 0xC0 + CMDLIST_COMPOSER_CHANNEL * 4;
+const CMDLIST_PLANE_CHANNEL: usize = 0;
+const CMDLIST_PLANE_START_ADDRL: usize = CMDLIST_BASE + CMDLIST_PLANE_CHANNEL * 4;
+const CMDLIST_PLANE_START_ADDRH: usize = CMDLIST_BASE + 0x40 + CMDLIST_PLANE_CHANNEL * 4;
+const CMDLIST_PLANE_Y_FIRST: usize = CMDLIST_BASE + 0xC0 + CMDLIST_PLANE_CHANNEL * 4;
+const CMDLIST_COMPOSER_START_ADDRL: usize = CMDLIST_BASE + CMDLIST_COMPOSER_CHANNEL * 4;
+const CMDLIST_COMPOSER_START_ADDRH: usize = CMDLIST_BASE + 0x40 + CMDLIST_COMPOSER_CHANNEL * 4;
+const CMDLIST_COMPOSER_Y_FIRST: usize = CMDLIST_BASE + 0xC0 + CMDLIST_COMPOSER_CHANNEL * 4;
+const CMDLIST_START_CMPS_Y: usize = DPU1_CTRL_TOP + 0x90;
 const CMDLIST_DBG0: usize = CMDLIST_BASE + 0x1D8 + CMDLIST_COMPOSER_CHANNEL * 4;
 const CMDLIST_DBG_STATUS: usize = CMDLIST_BASE + 0x1F8;
 // saturn_get_cl_cfg_rdy_addr() returns DPU_CTRL_BASE_ADDR + 0x34.  This is
@@ -267,13 +292,8 @@ const CMDLIST_DBG_STATUS: usize = CMDLIST_BASE + 0x1F8;
 // reserved in cmdlist_top.h.  The final cmdlist row must therefore target
 // DPU1+0x3F4.
 const CMDLIST_CFG_READY_ADDR: usize = DPU1_BASE + 0x3F4;
-const CMDLIST_CFG_BITS: u32 = if SATURN_SOLID_TEST && SATURN_SOLID_DIRECT_TEST {
-    0
-} else if SATURN_SOLID_TEST {
-    1 << 21
-} else {
-    (1 << 0) | (1 << 21)
-}; // composer1 or RDMA0 + composer1
+const CMDLIST_PLANE_CFG_BITS: u32 = 1 << CMDLIST_PLANE_CHANNEL;
+const CMDLIST_COMPOSER_CFG_BITS: u32 = 1 << 21;
 // The Saturn row stores a 12-bit strobe field at bits 19..30. Each register
 // occupies one nibble in that field (0xF, 0xF0, 0xF00).
 const CMDLIST_STROBE_ONE: u32 = 0xF;
@@ -284,7 +304,11 @@ const CMDLIST_STROBE_ALL: u32 = 0xFFF;
 // channel, so it must not wait for an event that can never occur. The header
 // stores bits 0..4 in the high five bits of the first u64 and the remaining
 // bits in the next u64.
-const CMDLIST_WAIT_EVENT_LOW: u64 = if SATURN_SOLID_TEST { 0 } else { 1u64 << 63 };
+const CMDLIST_WAIT_EVENT_LOW: u64 = if SATURN_SOLID_TEST || CMP_BACKGROUND_TEST {
+    0
+} else {
+    1u64 << 63
+};
 const CMDLIST_WAIT_EVENT_HIGH: u64 = 1u64 << 1;
 
 const CMP_DST_SIZE: usize = DPU1_COMPOSER1 + 0x04;
@@ -304,9 +328,9 @@ const SOLID_ALPHA: u32 = 0xFF;
 const SOLID_RED: u32 = 0x3FF;
 const SOLID_GREEN: u32 = 0x3FF;
 const SOLID_BLUE: u32 = 0x3FF;
-// The constructor's HEE driver writes only solid_color_a here. It leaves the
-// adjacent solid_area_mode bit at its reset value; forcing that bit changes
-// the active stream on this board, so keep the exact driver value.
+// The K3 HEE driver writes solid_color_a through the bitfield and leaves
+// solid_area_mode at its reset value. Keep the bare-metal value identical to
+// composer_x.h instead of forcing the undocumented bit 16.
 const CMP_LAYER0_SOLID_A_VALUE: u32 = SOLID_ALPHA;
 const CMP_LAYER0_SOLID_CTRL: u32 = 0x0000_FF09;
 const CMP_LAYER0_TEST_CTRL: u32 = if TMG_BACKGROUND_TEST || CMP_BACKGROUND_TEST {
@@ -328,15 +352,22 @@ const DPU1_MODE_VSYNC: u32 = 3;
 const DPU1_MODE_VBP: u32 = 96;
 const DPU1_PIXEL_CLOCK_KHZ: u32 = 108_000;
 
+// saturn_init_tmg() programs these control values before enabling the frame
+// timing state machine. The Linux driver stores vfp-7 and vfp-6 as 16-bit
+// values; for the LA2006x mode with vfp=1 this intentionally wraps to FFFA
+// and FFFB.
+const TMG_EOF_LINE_DELAY_VALUE: u32 =
+    (DPU1_MODE_VFP.wrapping_sub(7) & 0xFFFF) | ((DPU1_MODE_VFP.wrapping_sub(6) & 0xFFFF) << 16);
+const TMG_SOF_PRE_LINE_VALUE: u32 = 0;
+
 const TMG_CTRL_HSP_VSP: u32 = (1 << 7) | (1 << 8);
 const TMG_OUTFMT_RGB888: u32 = 2 << 12;
 // TMG0+0x0C contains split_overlap in bits 9:0 and HFP in bits 27:16.
 // HBP is in TMG0+0x10, so it must not be packed into this register.
 const TMG_HFP_REGISTER_VALUE: u32 = DPU1_MODE_HFP << 16;
-// The K3 Saturn timing enable is bit 0.  0x181 is the value previously
-// observed on the working TMG background test; bit 2 (0x184) leaves the
-// transmitter active but produces black pixels on this DPU revision.
-const TMG_CTRL_ACTIVE: u32 = TMG_CTRL_HSP_VSP | 1;
+// saturn_tmg_reg_0: bit 0 is split_en, while bit 2 is fm_timing_en. The
+// previous value used bit 0 and left the frame-timing generator stopped.
+const TMG_CTRL_ACTIVE: u32 = TMG_CTRL_HSP_VSP | (1 << 2);
 
 global_asm!(
     r#"
@@ -811,6 +842,16 @@ extern "C" fn rust_main() -> ! {
         DPU1_BASE + DPU1_TMG0 + TMG_VACTIVE,
         DPU1_MODE_HEIGHT,
     );
+    let timing_eof_delay_ok = uart.write_mmio_value(
+        "TMG0+0x2C_EOF_DELAY_RB=",
+        DPU1_BASE + DPU1_TMG0 + TMG_EOF_LINE_DELAY,
+        TMG_EOF_LINE_DELAY_VALUE,
+    );
+    let timing_sof_pre_ok = uart.write_mmio_value(
+        "TMG0+0x38_SOF_PRE_RB=",
+        DPU1_BASE + DPU1_TMG0 + TMG_SOF_PRE_LINE,
+        TMG_SOF_PRE_LINE_VALUE,
+    );
     let timing_align_ok =
         uart.write_mmio_value("TMG0+0x3C_RB=", DPU1_BASE + DPU1_TMG0 + TMG_VSYNC_ALIGN, 1);
     let timing_background_ok = uart.write_mmio_value(
@@ -829,6 +870,8 @@ extern "C" fn rust_main() -> ! {
         && timing_vfp_vsync_ok
         && timing_vbp_hactive_ok
         && timing_vactive_ok
+        && timing_eof_delay_ok
+        && timing_sof_pre_ok
         && timing_align_ok
         && timing_background_ok
     {
@@ -981,19 +1024,46 @@ extern "C" fn rust_main() -> ! {
     );
     // With DMMU translation enabled RDMA0 addresses the TBU virtual window.
     // Keep the channel and composer layer disabled until cmdlist validation.
-    let rdma_va_low_ok = uart.write_mmio_value(
-        "RDMA0+0x24_VA_RB=",
-        DPU1_BASE + DPU1_RDMA0 + RDMA_BASE_ADDR0_LOW,
-        DMMU_BASE_VA,
-    );
-    let rdma_va_high_ok = uart.write_mmio_value(
-        "RDMA0+0x28_VA_RB=",
-        DPU1_BASE + DPU1_RDMA0 + RDMA_BASE_ADDR0_HIGH,
-        0,
-    );
+    let rdma_va_low_ok = if RDMA_PHYS_DIRECT_TEST {
+        uart.write_mmio_value(
+            "RDMA0+0x24_PHYS_RB=",
+            DPU1_BASE + DPU1_RDMA0 + RDMA_BASE_ADDR0_LOW,
+            (SPLASH_ADDR as u32) & 0xFFFF_FFFF,
+        )
+    } else {
+        uart.write_mmio_value(
+            "RDMA0+0x24_VA_RB=",
+            DPU1_BASE + DPU1_RDMA0 + RDMA_BASE_ADDR0_LOW,
+            DMMU_BASE_VA,
+        )
+    };
+    let rdma_va_high_ok = if RDMA_PHYS_DIRECT_TEST {
+        uart.write_mmio_value(
+            "RDMA0+0x28_PHYS_RB=",
+            DPU1_BASE + DPU1_RDMA0 + RDMA_BASE_ADDR0_HIGH,
+            (SPLASH_ADDR >> 32) as u32,
+        )
+    } else {
+        uart.write_mmio_value(
+            "RDMA0+0x28_VA_RB=",
+            DPU1_BASE + DPU1_RDMA0 + RDMA_BASE_ADDR0_HIGH,
+            0,
+        )
+    };
+    let dmmu_mode_ok = if RDMA_PHYS_DIRECT_TEST {
+        uart.write_str("DMMU_MODE=PHYSICAL_DIRECT\n");
+        uart.write_mmio_value(
+            "TBU0+0x00_DIRECT_RB=",
+            DPU1_BASE + DMMU_TBU0 + DMMU_TBU_CTRL,
+            DMMU_TBU_CTRL_DIRECT_VALUE,
+        )
+    } else {
+        uart.write_str("DMMU_MODE=VIRTUAL\n");
+        true
+    };
     if table_first == first_page
         && table_last == last_page
-        && tbu_ctrl_ok
+        && (RDMA_PHYS_DIRECT_TEST && dmmu_mode_ok || !RDMA_PHYS_DIRECT_TEST && tbu_ctrl_ok)
         && tbu_base_low_ok
         && tbu_base_high_ok
         && tbu_va_ok
@@ -1014,136 +1084,243 @@ extern "C" fn rust_main() -> ! {
     uart.write_str("CMDLIST_STAGE_BEGIN\n");
     let mut row_index = 0usize;
     let header_words = (CMDLIST_ADDR as *mut u64, (CMDLIST_ADDR + 8) as *mut u64);
-    let mut rows = [[0u32; 4]; 17];
+    let mut rows = [[0u32; 4]; 21];
+    // saturn_hee_plane_update_hw_channel() always emits the RDMA path header
+    // before the framebuffer registers.  In particular, layer_cmpsr_id=1
+    // attaches RDMA0 to CMP1 (DPU1); without it the RDMA can fetch pixels
+    // while the composer silently ignores that channel.  The second row
+    // clears the offline/two-layer flags for the online single-layer path.
     rows[0] = [
-        ((DPU1_RDMA0 + RDMA_BASE_ADDR0_LOW) >> 2) as u32 | (CMDLIST_STROBE_TWO << 19),
-        DMMU_BASE_VA,
+        (DPU1_RDMA0 >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
+        1 << 13, // layer_cmpsr_id=1, layer_mode=0
         0,
         0,
     ];
     rows[1] = [
+        ((DPU1_RDMA0 + 0x04) >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
+        0, // is_two_layers=0, is_offline=0
+        0,
+        0,
+    ];
+    rows[2] = [
+        ((DPU1_RDMA0 + RDMA_BASE_ADDR0_LOW) >> 2) as u32 | (CMDLIST_STROBE_TWO << 19),
+        if RDMA_PHYS_DIRECT_TEST {
+            (SPLASH_ADDR as u32) & 0xFFFF_FFFF
+        } else {
+            DMMU_BASE_VA
+        },
+        if RDMA_PHYS_DIRECT_TEST {
+            (SPLASH_ADDR >> 32) as u32
+        } else {
+            0
+        },
+        0,
+    ];
+    rows[3] = [
         ((DPU1_RDMA0 + RDMA_STRIDE0) >> 2) as u32 | (CMDLIST_STROBE_ALL << 19),
         DPU1_MODE_WIDTH * 4,
         DPU1_MODE_WIDTH | (DPU1_MODE_HEIGHT << 16),
         0,
     ];
-    rows[2] = [
+    rows[4] = [
         ((DPU1_RDMA0 + RDMA_BBOX_END) >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
         (DPU1_MODE_WIDTH - 1) | ((DPU1_MODE_HEIGHT - 1) << 16),
         0,
         0,
     ];
-    rows[3] = [
+    rows[5] = [
         ((DPU1_RDMA0 + RDMA_FORMAT) >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
         7,
         0,
         0,
     ];
-    rows[4] = [
-        (DMMU_TBU0 >> 2) as u32 | (CMDLIST_STROBE_ALL << 19),
-        DMMU_TBU_CTRL_VALUE,
-        (DMMU_TABLE_ADDR as u32) & 0xFFFF_FFFF,
-        (DMMU_TABLE_ADDR >> 32) as u32,
-    ];
-    rows[5] = [
-        ((DMMU_TBU0 + DMMU_TBU_VA0) >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
-        DMMU_BASE_VA >> 12,
-        0,
-        0,
-    ];
     rows[6] = [
-        ((DMMU_TBU0 + DMMU_TBU_SIZE0) >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
-        DMMU_PAGE_COUNT as u32,
-        0,
-        0,
+        (DMMU_TBU0 >> 2) as u32 | (CMDLIST_STROBE_ALL << 19),
+        if RDMA_PHYS_DIRECT_TEST {
+            DMMU_TBU_CTRL_DIRECT_VALUE
+        } else {
+            DMMU_TBU_CTRL_VALUE
+        },
+        if RDMA_PHYS_DIRECT_TEST {
+            0
+        } else {
+            (DMMU_TABLE_ADDR as u32) & 0xFFFF_FFFF
+        },
+        if RDMA_PHYS_DIRECT_TEST {
+            0
+        } else {
+            (DMMU_TABLE_ADDR >> 32) as u32
+        },
     ];
     rows[7] = [
-        ((DMMU_TBU0 + DMMU_TBU_VSYNC) >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
-        1 << 1,
+        ((DMMU_TBU0 + DMMU_TBU_VA0) >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
+        if RDMA_PHYS_DIRECT_TEST {
+            0
+        } else {
+            DMMU_BASE_VA >> 12
+        },
         0,
         0,
     ];
     rows[8] = [
+        ((DMMU_TBU0 + DMMU_TBU_SIZE0) >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
+        if RDMA_PHYS_DIRECT_TEST {
+            0
+        } else {
+            DMMU_PAGE_COUNT as u32
+        },
+        0,
+        0,
+    ];
+    rows[9] = [
+        ((DMMU_TBU0 + DMMU_TBU_VSYNC) >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
+        if RDMA_PHYS_DIRECT_TEST { 0 } else { 1 << 1 },
+        0,
+        0,
+    ];
+    rows[10] = [
         (CMP_DST_SIZE >> 2) as u32 | (CMDLIST_STROBE_ALL << 19),
         DPU1_MODE_WIDTH | (DPU1_MODE_HEIGHT << 16),
         0,
         0,
     ];
-    rows[9] = [
+    rows[11] = [
         ((CMP_BG_ALPHA - 4) >> 2) as u32 | (CMDLIST_STROBE_TWO << 19),
         0,
         0xFF,
         0,
     ];
-    rows[10] = [
+    rows[12] = [
         (CMP_LAYER0_AREA_X >> 2) as u32 | (CMDLIST_STROBE_TWO << 19),
         (DPU1_MODE_WIDTH - 1) << 16,
         (DPU1_MODE_HEIGHT - 1) << 16,
         0,
     ];
+    // saturn_hee_conf_dpuctrl() always submits the online postpipe in the
+    // composer group, even when post scaling is disabled. The constructor
+    // writes split_en=0 and the active composer dimensions here.
+    rows[16] = [
+        (POSTPIPE_CTRL >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
+        0,
+        0,
+        0,
+    ];
+    rows[17] = [
+        // m_inwidth and m_inheight share value32[13] at +0x34. The Linux
+        // cmdlist writer marks only that one register slot, not a 3-register
+        // row; using 0xFFF makes this POSTPIPE row invalid on the HEE parser.
+        (POSTPIPE_SIZE >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
+        DPU1_MODE_WIDTH | (DPU1_MODE_HEIGHT << 16),
+        0,
+        0,
+    ];
+    // Linux keeps the plane registers and the composer registers in separate
+    // command-list groups. The RDMA/TBU list is channel 0; CMP1, POSTPIPE and
+    // the composer CFG_RDY row are the CRTC list on channel 7. Keeping the
+    // composer rows in the plane list makes the HEE parser consume them under
+    // the wrong reload event, which leaves the output black even when every
+    // register readback looks plausible.
+    let composer_dst_row = rows[10];
+    let composer_bg_row = rows[11];
+    let composer_area_row = rows[12];
     let row_count;
     if SATURN_SOLID_TEST {
-        // The solid layer is generated inside CMP1. It has no RDMA source;
-        // the preceding RDMA/TBU rows stay inert because scene control below
-        // leaves the normal RDMA channels disabled.
-        rows[11] = [
+        // Linux submits RDMA/TBU rows on the plane channel and the CMP1 /
+        // POSTPIPE rows on the CRTC composer channel. A solid layer has no
+        // plane channel at all, so the composer list must contain only the
+        // CMP1 group. Keeping the unrelated RDMA/TBU rows here made the
+        // previous diagnostic differ from the driver's list topology.
+        rows[0] = rows[10];
+        rows[1] = rows[11];
+        rows[2] = rows[12];
+        rows[3] = [
             (CMP_LAYER0_SOLID_R >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
             0,
             0,
             0,
         ];
-        rows[12] = [
+        rows[4] = [
             (CMP_LAYER0_SOLID_G >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
             0,
             0,
             0,
         ];
-        rows[13] = [
+        rows[5] = [
             (CMP_LAYER0_SOLID_B >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
             SOLID_BLUE,
             0,
             0,
         ];
-        rows[14] = [
+        rows[6] = [
             (CMP_LAYER0_SOLID_A >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
             CMP_LAYER0_SOLID_A_VALUE,
             0,
             0,
         ];
-        rows[15] = [
+        rows[7] = [
             (CMP_LAYER0_CTRL >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
             CMP_LAYER0_TEST_CTRL,
             0,
             0,
         ];
-        rows[16] = [
-            ((CMDLIST_CFG_READY_ADDR - DPU1_BASE) >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
-            CMDLIST_CFG_BITS,
+        rows[8] = [
+            (POSTPIPE_CTRL >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
+            0,
             0,
             0,
         ];
-        row_count = 17;
+        rows[9] = [
+            (POSTPIPE_SIZE >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
+            DPU1_MODE_WIDTH | (DPU1_MODE_HEIGHT << 16),
+            0,
+            0,
+        ];
+        rows[10] = [
+            ((CMDLIST_CFG_READY_ADDR - DPU1_BASE) >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
+            CMDLIST_COMPOSER_CFG_BITS,
+            0,
+            0,
+        ];
+        row_count = 11;
     } else {
         // layer00_en=1, alpha selection=pixel alpha, layer alpha=0xff,
         // solid color disabled, and RDMA0 selected.
-        rows[11] = [
+        rows[13] = [
             (CMP_LAYER0_CTRL >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
-            0x0000_FF03,
+            if CMP_BACKGROUND_TEST { 0 } else { 0x0000_FF03 },
             0,
             0,
         ];
-        rows[12] = [
+        // saturn_hee_cmdlist_fill_conf_row() adds this row to each plane
+        // list before its final CFG_RDY row. It is required even when the
+        // plane is not vertically sliced; the previous single-channel list
+        // omitted it entirely.
+        rows[14] = [
+            ((DPU1_BASE + CMDLIST_START_CMPS_Y - DPU1_BASE) >> 2) as u32
+                | (CMDLIST_STROBE_ONE << 19),
+            0,
+            0,
+            0,
+        ];
+        rows[15] = [
             ((CMDLIST_CFG_READY_ADDR - DPU1_BASE) >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
-            CMDLIST_CFG_BITS,
+            CMDLIST_PLANE_CFG_BITS,
             0,
             0,
         ];
-        row_count = 13;
+        // The plane list contains only RDMA/TBU rows, START_CMPS_Y and its
+        // own CFG_RDY. Move the two rows that were staged after the composer
+        // rows into the compact plane list before it is written below.
+        rows[10] = rows[14];
+        rows[11] = rows[15];
+        row_count = 12;
     }
-    let header0 = ((row_count as u64 + 1) << 40)
-        | (1u64 << 56)
-        | CMDLIST_WAIT_EVENT_LOW
-        | CMDLIST_WAIT_EVENT_HIGH;
+    // The HEE header is two u64 words.  The first word contains only the
+    // next-list address, node length/type and the low five wait-event bits;
+    // the remaining wait-event bits live in the second word.  Putting
+    // CMDLIST_WAIT_EVENT_HIGH into header0 corrupts next_list_addr (the
+    // previous trace exposed this as a spurious low value of 0x2).
+    let header0 = ((row_count as u64 + 1) << 40) | (1u64 << 56) | CMDLIST_WAIT_EVENT_LOW;
     unsafe {
         write_volatile(header_words.0, header0);
         write_volatile(header_words.1, CMDLIST_WAIT_EVENT_HIGH);
@@ -1166,30 +1343,118 @@ extern "C" fn rust_main() -> ! {
         }
         core::arch::asm!("fence rw, rw");
     }
+
+    // The CRTC list carries only the online POSTPIPE and composer CFG_RDY
+    // rows. Linux submits it on channel 7 after the plane list on channel 0;
+    // keeping it separate is essential for the HEE channel-local reload
+    // events.
+    let mut crtc_rows = [[0u32; 4]; 16];
+    let crtc_row_count;
+    if SATURN_SOLID_TEST {
+        // In solid mode rows[0..11] already contain the CMP1 layer, POSTPIPE
+        // and composer CFG_RDY sequence. They belong on channel 7 as well.
+        let mut index = 0usize;
+        while index < row_count {
+            crtc_rows[index] = rows[index];
+            index += 1;
+        }
+        crtc_row_count = row_count;
+    } else {
+        // Recreate the composer rows emitted by
+        // saturn_hee_plane_update_hw_channel(): destination, background,
+        // layer area, layer blend state, then the online POSTPIPE rows.
+        crtc_rows[0] = composer_dst_row;
+        crtc_rows[1] = composer_bg_row;
+        crtc_rows[2] = composer_area_row;
+        crtc_rows[3] = [
+            (CMP_LAYER0_SOLID_A >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
+            0,
+            0,
+            0,
+        ];
+        crtc_rows[4] = rows[13];
+        crtc_rows[5] = [
+            (POSTPIPE_CTRL >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
+            0,
+            0,
+            0,
+        ];
+        crtc_rows[6] = [
+            (POSTPIPE_SIZE >> 2) as u32 | (CMDLIST_STROBE_ONE << 19),
+            DPU1_MODE_WIDTH | (DPU1_MODE_HEIGHT << 16),
+            0,
+            0,
+        ];
+        crtc_rows[7] = [
+            ((CMDLIST_CFG_READY_ADDR - DPU1_BASE) >> 2) as u32
+                | (CMDLIST_STROBE_ONE << 19)
+                | (1 << 31),
+            CMDLIST_COMPOSER_CFG_BITS,
+            0,
+            0,
+        ];
+        crtc_row_count = 8;
+    }
+    let crtc_header0 = ((crtc_row_count as u64 + 1) << 40) | (1u64 << 56);
+    unsafe {
+        write_volatile(CMDLIST_CRTC_ADDR as *mut u64, crtc_header0);
+        write_volatile((CMDLIST_CRTC_ADDR + 8) as *mut u64, CMDLIST_WAIT_EVENT_HIGH);
+        for index in 0..crtc_row_count {
+            let row = crtc_rows[index];
+            let row_addr = (CMDLIST_CRTC_ADDR + 16 + index * 16) as *mut u32;
+            write_volatile(row_addr, row[0]);
+            write_volatile(row_addr.add(1), row[1]);
+            write_volatile(row_addr.add(2), row[2]);
+            write_volatile(row_addr.add(3), row[3]);
+        }
+        core::arch::asm!("fence rw, rw");
+    }
     let cmd_header = unsafe { read_volatile(CMDLIST_ADDR as *const u64) };
     let cmd_last_row =
         unsafe { read_volatile((CMDLIST_ADDR + 16 + (row_count - 1) * 16) as *const u32) };
+    let crtc_header = unsafe { read_volatile(CMDLIST_CRTC_ADDR as *const u64) };
+    let crtc_last_row = unsafe {
+        read_volatile((CMDLIST_CRTC_ADDR + 16 + (crtc_row_count - 1) * 16) as *const u32)
+    };
     uart.write_str("CMDLIST_HEADER=");
     uart.write_hex_u64(cmd_header);
     uart.write_str("\nCMDLIST_LAST=");
     uart.write_hex_u32(cmd_last_row);
     uart.write_str("\n");
-    let cmdlist_start_low_ok = uart.write_mmio_value(
-        "CMDLIST7+0x1C_RB=",
-        DPU1_BASE + CMDLIST_START_ADDRL,
+    let cmdlist_plane_start_low_ok = uart.write_mmio_value(
+        "CMDLIST0+0x00_RB=",
+        DPU1_BASE + CMDLIST_PLANE_START_ADDRL,
         ((CMDLIST_ADDR >> 4) as u32) & 0x0FFF_FFFF,
     );
-    let cmdlist_start_high_ok = uart.write_mmio_value(
-        "CMDLIST7+0x5C_RB=",
-        DPU1_BASE + CMDLIST_START_ADDRH,
+    let cmdlist_plane_start_high_ok = uart.write_mmio_value(
+        "CMDLIST0+0x40_RB=",
+        DPU1_BASE + CMDLIST_PLANE_START_ADDRH,
         (CMDLIST_ADDR >> 32) as u32,
     );
-    let cmdlist_y_ok = uart.write_mmio_value("CMDLIST7+0xDC_RB=", DPU1_BASE + CMDLIST_Y_FIRST, 0);
+    let cmdlist_plane_y_ok =
+        uart.write_mmio_value("CMDLIST0+0xC0_RB=", DPU1_BASE + CMDLIST_PLANE_Y_FIRST, 0);
+    let cmdlist_composer_start_low_ok = uart.write_mmio_value(
+        "CMDLIST7+0x1C_RB=",
+        DPU1_BASE + CMDLIST_COMPOSER_START_ADDRL,
+        ((CMDLIST_CRTC_ADDR >> 4) as u32) & 0x0FFF_FFFF,
+    );
+    let cmdlist_composer_start_high_ok = uart.write_mmio_value(
+        "CMDLIST7+0x5C_RB=",
+        DPU1_BASE + CMDLIST_COMPOSER_START_ADDRH,
+        (CMDLIST_CRTC_ADDR >> 32) as u32,
+    );
+    let cmdlist_composer_y_ok =
+        uart.write_mmio_value("CMDLIST7+0xDC_RB=", DPU1_BASE + CMDLIST_COMPOSER_Y_FIRST, 0);
     let cmdlist_stage_ok = cmd_header == header0
         && cmd_last_row & (1 << 31) != 0
-        && cmdlist_start_low_ok
-        && cmdlist_start_high_ok
-        && cmdlist_y_ok;
+        && crtc_header == crtc_header0
+        && crtc_last_row & (1 << 31) != 0
+        && cmdlist_plane_start_low_ok
+        && cmdlist_plane_start_high_ok
+        && cmdlist_plane_y_ok
+        && cmdlist_composer_start_low_ok
+        && cmdlist_composer_start_high_ok
+        && cmdlist_composer_y_ok;
     if cmdlist_stage_ok {
         uart.write_str("CMDLIST_STAGE_OK\n");
     } else {
@@ -1207,7 +1472,11 @@ extern "C" fn rust_main() -> ! {
         let cmdlist_channel_ok = uart.write_mmio_value(
             "DPU1+0x3C0_RB=",
             DPU1_BASE + DPU1_CTRL_TOP,
-            if SATURN_SOLID_TEST { 0 } else { 1 },
+            if SATURN_SOLID_TEST || CMP_BACKGROUND_TEST {
+                0
+            } else {
+                1
+            },
         );
         let cmdlist_composer_ok = uart.write_mmio_value(
             "DPU1+0x3E8_RB=",
@@ -1222,7 +1491,12 @@ extern "C" fn rust_main() -> ! {
         // nml_outctl_en and nml_frm_timing_en belong in this register.
         // The previous literal also enabled writeback and DSC bits, which
         // left the output black even though the timing generator was active.
-        let scene_route_value = (if SATURN_SOLID_TEST { 0 } else { 1 }) | (1 << 18) | (2 << 23);
+        let scene_route_value = (if SATURN_SOLID_TEST || CMP_BACKGROUND_TEST {
+            0
+        } else {
+            1
+        }) | (1 << 18)
+            | (2 << 23);
         let scene_route_ok =
             uart.write_mmio_value("DPU1+0x340_RB=", DPU1_BASE + DPU1_SCENE1, scene_route_value);
         let scene_update_ok =
@@ -1313,6 +1587,8 @@ extern "C" fn rust_main() -> ! {
         DPU1_BASE + CMP_LAYER0_CTRL,
         if SATURN_SOLID_TEST {
             CMP_LAYER0_TEST_CTRL
+        } else if CMP_BACKGROUND_TEST {
+            0
         } else {
             0x0000_FF03
         },
@@ -1707,6 +1983,21 @@ extern "C" fn rust_main() -> ! {
                     DPU1_BASE + DPU1_TMG0 + TMG_CTRL,
                     TMG_CTRL_ACTIVE,
                 );
+                // The command-list POSTPIPE rows are not visible in the
+                // active window on this board. For this diagnostic, apply the
+                // same two values directly before CFG_READY/SW_START, which
+                // is the ordering used by the constructor's scene commit.
+                let postpipe_direct_ok = if POSTPIPE_DIRECT_TEST {
+                    uart.write_mmio_value("POSTPIPE+0x00_DIRECT_RB=", DPU1_BASE + POSTPIPE_CTRL, 0)
+                        && uart.write_mmio_value(
+                            "POSTPIPE+0x34_DIRECT_RB=",
+                            DPU1_BASE + POSTPIPE_SIZE,
+                            DPU1_MODE_WIDTH | (DPU1_MODE_HEIGHT << 16),
+                        )
+                } else {
+                    true
+                };
+
                 // Match saturn_hee_cfg_ready() and saturn_hee_sw_start().
                 // The command-list CFG_RDY row arms the channel, while this
                 // scene-control handshake releases the normal DPU frame.
@@ -1767,14 +2058,47 @@ extern "C" fn rust_main() -> ! {
                 uart.write_mmio("CMP1+0x30_POST_RB=", DPU1_BASE + CMP_LAYER0_SOLID_B);
                 uart.write_mmio("CMP1+0x34_POST_RB=", DPU1_BASE + CMP_LAYER0_SOLID_A);
                 uart.write_mmio("CMP1+0x38_POST_RB=", DPU1_BASE + CMP_LAYER0_CTRL);
+                uart.write_mmio("POSTPIPE+0x00_POST_RB=", DPU1_BASE + POSTPIPE_CTRL);
+                uart.write_mmio("POSTPIPE+0x34_POST_RB=", DPU1_BASE + POSTPIPE_SIZE);
                 uart.write_mmio("TMG0+0x00_POST_RB=", DPU1_BASE + DPU1_TMG0 + TMG_CTRL);
                 uart.write_mmio("DPU1+0x730_POST_RB=", DPU1_BASE + DPU_ONLINE_IRQ_STATUS);
                 uart.write_mmio("RDMA0+0xB4_POST_RB=", DPU1_BASE + RDMA_DBG_IRQ_STATUS);
+                uart.write_mmio("RDMA0+0x00_POST_RB=", DPU1_BASE + DPU1_RDMA0 + RDMA_CTRL);
+                uart.write_mmio(
+                    "RDMA0+0x24_POST_RB=",
+                    DPU1_BASE + DPU1_RDMA0 + RDMA_BASE_ADDR0_LOW,
+                );
+                uart.write_mmio(
+                    "RDMA0+0x28_POST_RB=",
+                    DPU1_BASE + DPU1_RDMA0 + RDMA_BASE_ADDR0_HIGH,
+                );
+                uart.write_mmio("RDMA0+0x3C_POST_RB=", DPU1_BASE + DPU1_RDMA0 + RDMA_STRIDE0);
+                uart.write_mmio(
+                    "RDMA0+0x40_POST_RB=",
+                    DPU1_BASE + DPU1_RDMA0 + RDMA_IMAGE_SIZE,
+                );
+                uart.write_mmio(
+                    "RDMA0+0x48_POST_RB=",
+                    DPU1_BASE + DPU1_RDMA0 + RDMA_BBOX_END,
+                );
+                uart.write_mmio("RDMA0+0x74_POST_RB=", DPU1_BASE + DPU1_RDMA0 + RDMA_FORMAT);
+                uart.write_mmio("TBU0+0x00_POST_RB=", DPU1_BASE + DMMU_TBU0 + DMMU_TBU_CTRL);
+                uart.write_mmio(
+                    "TBU0+0x04_POST_RB=",
+                    DPU1_BASE + DMMU_TBU0 + DMMU_TBU_BASE0_LOW,
+                );
+                uart.write_mmio(
+                    "TBU0+0x08_POST_RB=",
+                    DPU1_BASE + DMMU_TBU0 + DMMU_TBU_BASE0_HIGH,
+                );
+                uart.write_mmio("TBU0+0x1C_POST_RB=", DPU1_BASE + DMMU_TBU0 + DMMU_TBU_VA0);
+                uart.write_mmio("TBU0+0x28_POST_RB=", DPU1_BASE + DMMU_TBU0 + DMMU_TBU_SIZE0);
                 uart.write_str("DPU_POST_COMMIT_END\n");
                 if msa_ok
                     && timing_enable_ok
                     && scene_cfg_ready_ok
                     && scene_sw_start_ok
+                    && postpipe_direct_ok
                     && cmp_layer_active_ok
                 {
                     uart.write_str("DP_MSA_STAGE_OK\n");
@@ -1829,6 +2153,16 @@ extern "C" fn rust_main() -> ! {
                     uart.write_mmio("RDMA0+0xC4_DBG_INFO2=", DPU1_BASE + RDMA_DBG_INFO2);
                     uart.write_mmio("RDMA0+0xC8_DBG_INFO3=", DPU1_BASE + RDMA_DBG_INFO3);
                     uart.write_mmio("RDMA0+0xCC_DBG_INFO4=", DPU1_BASE + RDMA_DBG_INFO4);
+                    uart.write_mmio("RDMA0+0x00_DIAG=", DPU1_BASE + DPU1_RDMA0 + RDMA_CTRL);
+                    uart.write_mmio(
+                        "RDMA0+0x24_DIAG=",
+                        DPU1_BASE + DPU1_RDMA0 + RDMA_BASE_ADDR0_LOW,
+                    );
+                    uart.write_mmio(
+                        "RDMA0+0x28_DIAG=",
+                        DPU1_BASE + DPU1_RDMA0 + RDMA_BASE_ADDR0_HIGH,
+                    );
+                    uart.write_mmio("TBU0+0x00_DIAG=", DPU1_BASE + DMMU_TBU0 + DMMU_TBU_CTRL);
                     uart.write_str("SCANOUT_DIAG_OK\n");
 
                     uart.write_str("RGB_CYCLE_BEGIN\n");
@@ -1897,6 +2231,11 @@ extern "C" fn rust_main() -> ! {
                             }
                         }
                     } else {
+                        if RDMA_PHYS_DIRECT_TEST {
+                            uart.write_str("RDMA_MODE=PHYSICAL_DIRECT\n");
+                        } else {
+                            uart.write_str("RDMA_MODE=DMMU_VIRTUAL\n");
+                        }
                         for (label, color) in [
                             ("BLUE", 0xFF00_00FF),
                             ("RED", 0xFFFF_0000),

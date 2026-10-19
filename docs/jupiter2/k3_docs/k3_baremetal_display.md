@@ -393,3 +393,216 @@ RDMA/DMMU ou la sélection de la source TMG.
 
 État de validation : `SPLASH_OK` n'est pas obtenu, le splash BGRA n'est pas
 affiché et le bring-up vidéo Saturn est suspendu sur cet échec reproductible.
+
+## Conclusion du bring-up au 18 octobre 2026
+
+La sortie physique est validée indépendamment du compositeur : la mire DP
+interne est visible, l'AUX et le link training réussissent, et le moniteur
+accepte le mode DMT `1600x900@60` via l'adaptateur USB-C/HDMI. Le registre TMG
+`0x00=0x184` active `fm_timing_en` et les IRQ brutes DPU montrent désormais
+VSYNC/EOF.
+
+Le noir du dernier test provenait du scénario `SATURN_SOLID_DIRECT_TEST=true`,
+qui désactivait la cmdlist du compositeur et ne démontrait pas la consommation
+effective des registres CMP1. Le firmware a été remis en mode cmdlist avec
+`DPU1+0x3E8=0x3`, puis reconstruit. Cette variante doit encore être exécutée
+après reset. Tant qu'une couleur solide Saturn n'est pas visible, le chemin
+RDMA/DMMU et le splash BGRA restent volontairement en attente.
+
+## Correctif POSTPIPE préparé — 19 octobre 2026
+
+La trace du test cmdlist a confirmé la consommation de `CFG_READY` et des
+registres CMP1, mais l'écran est resté noir. Le pilote constructeur configure
+également le POSTPIPE dans le groupe cmdlist en ligne, même sans mise à
+l'échelle : registre de contrôle à `CMP1+0x300` avec `split_en=0`, puis registre
+de dimensions à `CMP1+0x334` avec `1600x900`.
+
+Le firmware V4 ajoute maintenant ces deux lignes avant la validation du groupe
+compositeur. La nouvelle image de diagnostic est prête ; son résultat visuel
+reste à obtenir après reset. Cette piste doit être validée avant toute reprise
+du framebuffer BGRA.
+
+## Fond TMG rouge confirmé — 19 octobre 2026
+
+Avec `TMG_BACKGROUND_TEST=true`, `CMP_BACKGROUND_TEST=false` et
+`DP_COLORBAR_TEST=false`, le moniteur a affiché le fond rouge généré directement
+par TMG0. La trace UART contenait :
+
+```text
+TMG0+0x24_BG_RG_RB=0x00000FFF
+CMP1+0x38_POST_RB=0x00000000
+TMG0+0x00_POST_RB=0x00000184
+DPU1+0x758_IRQ_RAW=0x40000133
+SCANOUT_STAGE_OK
+TMG_BACKGROUND_RED_HOLD
+```
+
+Le timing, le scanout, le lien DP et l'adaptateur USB-C/HDMI sont ainsi
+confirmés indépendamment du compositeur. Le problème restant est limité au
+chemin CMP1/Saturn/POSTPIPE.
+
+Le prochain essai remet `TMG_BACKGROUND_TEST=false` et utilise
+`SATURN_SOLID_TEST=true` avec `SATURN_SOLID_DIRECT_TEST=false`, afin de tester
+la couleur solide soumise par cmdlist. Le framebuffer BGRA ne sera repris
+qu'après validation visuelle de ce chemin.
+
+## Test Saturn après reset — 19 octobre 2026
+
+Le binaire a été transféré par TFTP à `0x140000000` et exécuté après
+`V4_BOOT_HALTED`. La cmdlist CMP1 est consommée et le firmware atteint
+`SATURN_SOLID_BLUE_HOLD` avec `SCANOUT_STAGE_OK` et `SCANOUT_DIAG_OK`.
+
+```text
+SATURN_MODE=SOLID_CMDLIST
+CMP1+0x38_ACTIVE_RB=0x0000FF09
+DPU1+0x3E8_POST_RB=0x00000003
+DPU1+0x3F4_CFG_READY=0x00000000
+TMG0+0x00_POST_RB=0x00000184
+DPU1+0x758_IRQ_RAW=0x40000133
+POSTPIPE+0x00_POST_RB=0x00000000
+POSTPIPE+0x34_POST_RB=0x00000000
+SATURN_SOLID_BLUE_HOLD
+```
+
+Le registre de dimensions du POSTPIPE reste nul alors que la cmdlist du
+compositeur est bien active. La prochaine analyse doit vérifier l'adresse et
+le format de la ligne `POSTPIPE+0x34` dans le groupe cmdlist avant de reprendre
+le framebuffer BGRA.
+
+Le pilote K3 précise que `m_inwidth` et `m_inheight` partagent
+`POSTPIPE+0x34`, soit `value32[13]`. `cmdlist_regs_packing()` génère une seule
+ligne pour cet emplacement avec le strobe `0xF`. Le firmware envoyait `0xFFF`,
+qui correspond à trois registres consécutifs ; cette erreur est la cause du
+readback nul et vient d'être corrigée.
+
+La couleur solide Saturn reste noire malgré la consommation de la cmdlist.
+Le prochain essai utilise donc le chemin normal `RDMA0 → DMMU → CMP1 →
+POSTPIPE` avec le framebuffer BGRA à `0x102000000`; U-Boot doit charger le
+fichier `splashscreen-1600x900.bgra` avant le firmware.
+
+## Diagnostic RDMA physique — 19 octobre 2026
+
+Le framebuffer est lisible par le CPU à `0x102000000`, mais le chemin normal
+RDMA/DMMU reste noir alors que le timing TMG et le lien DP sont actifs. Pour
+éviter de confondre une erreur de table de pages avec une erreur de
+composition, le firmware fournit un mode temporaire `RDMA_PHYS_DIRECT_TEST`.
+
+Dans ce mode, RDMA0 reçoit directement l'adresse physique 36 bits du
+framebuffer :
+
+```text
+RDMA0+0x24 = 0x02000000
+RDMA0+0x28 = 0x00000001
+TBU0+0x00  = 0x00000000
+```
+
+La cmdlist écrit ces valeurs après la configuration de scène et le firmware
+relit aussi le stride (`0x3C`), la taille (`0x40`), la fin de fenêtre (`0x48`),
+le format (`0x74`) ainsi que les registres TBU0 après commit. Le test direct
+est valide si l'écran affiche le framebuffer ou le cycle de couleurs. Un
+résultat noir avec TBU0 désactivé écartera la traduction DMMU et orientera la
+suite vers CMP1, POSTPIPE ou le routage TMG.
+
+## Résultat du test direct — 19 octobre 2026
+
+Le test a été exécuté après reset. RDMA0 a conservé l'adresse physique
+`0x102000000`, TBU0 est resté désactivé et le compteur de debug RDMA n'a
+rapporté aucune erreur :
+
+```text
+RDMA0+0x24_POST_RB=0x02000000
+RDMA0+0x28_POST_RB=0x00000001
+TBU0+0x00_POST_RB=0x00000000
+RDMA0+0xB4_POST_RB=0x00000000
+```
+
+La cmdlist est consommée (`DPU1+0x3E8_POST_RB=0x00000003`) et le firmware
+atteint `RGB_CYCLE_DONE`. `POSTPIPE+0x34_POST_RB` reste cependant nul. Le
+prochain essai doit donc vérifier une écriture directe de
+`POSTPIPE+0x34=1600x900` et le routage du POSTPIPE dans CMP1.
+
+Le firmware de diagnostic suivant ajoute cette écriture directe après
+`SW_START` et journalise `POSTPIPE+0x34_DIRECT_RB`. Son image binaire mesure
+`42213` octets ; elle doit être rechargée après reset.
+
+Après exécution, `POSTPIPE+0x34_DIRECT_RB` et le readback post-commit valent
+tous deux `0x03840640`. L'accès direct au registre fonctionne donc ; le
+problème est limité à l'application de la ligne POSTPIPE par la cmdlist.
+
+Le test direct est cependant resté noir à l'écran malgré le readback correct
+du POSTPIPE. Le diagnostic suivant désactive RDMA0 et utilise le fond rouge
+interne de CMP1 pour isoler le compositeur du flux mémoire. Son image mesure
+`41453` octets.
+
+## Test Saturn isolé — 19 octobre 2026
+
+Le fond CMP1 n'a pas été visible. Comme ce scénario désactivait `layer00`, un
+test séparé revient à une couche solide bleue soumise par la cmdlist du
+compositeur 1 sur le canal 7, sans RDMA, DMMU ni framebuffer.
+
+`solid_area_mode` est le bit 16 de `CMP1+0x34`, à côté de `solid_color_a`.
+Le firmware écrit donc `0x000100FF` dans ce registre et `0x0000FF09` dans
+`CMP1+0x38` pour activer la couche et sa source solide. Le binaire de ce test
+mesure `41549` octets et attend un reset physique avant chargement.
+
+## Trace Saturn et diagnostic POSTPIPE — 19 octobre 2026
+
+La couche solide bleue et la cmdlist CMP1 sont actives, mais l'image reste
+noire. `CMP1+0x34=0x000100FF`, `CMP1+0x38=0x0000FF09` et
+`DPU1+0x3E8=0x00000003` sont corrects ; `POSTPIPE+0x34` reste à zéro.
+Le test suivant écrit directement `POSTPIPE+0x00=0` et
+`POSTPIPE+0x34=0x03840640` avant la validation de scène. Son binaire mesure
+`41597` octets.
+
+
+## Conclusion du bring-up vidéo — 19 octobre 2026
+
+Le test suivant, avec l'en-tête cmdlist corrigé et la couche solide bleue,
+reste noir. Les essais précédents sont également noirs avec RDMA en adresse
+physique directe, TBU0 désactivé et POSTPIPE écrit directement.
+
+Les observations séparent désormais clairement les deux parties du système :
+
+- la chaîne physique fonctionne : Bianbu, mire DP interne, fond TMG rouge,
+  HPD, AUX, link training HBR2 et timing 1600×900@60 Hz ;
+- la chaîne Saturn/CMP1 ne livre pas de pixels visibles au TMG, malgré des
+  readbacks cohérents et une cmdlist consommée.
+
+Le prochain travail doit comparer l'état complet laissé par le pilote Linux
+Bianbu avec la séquence bare-metal : commit de scène, sélection du groupe
+cmdlist, routage CMP1/POSTPIPE, activation de la source TMG et registres de
+sortie associés. La DMMU et le framebuffer BGRA ne sont plus la priorité tant
+que ce chemin de composition n'est pas démontré. Aucun SPLASH_OK ne doit être
+ajouté avant une observation visuelle.
+
+
+## Correction de topologie des cmdlists — 19 octobre 2026
+
+Le pilote constructeur confirme que la liste de plane et la liste CRTC sont
+distinctes. La première est chargée sur le canal RDMA0 et regroupe les lignes
+RDMA/TBU, CMP1 et START_CMPS_Y. La seconde est chargée sur le canal 7 et
+regroupe POSTPIPE et CFG_RDY du compositeur.
+
+Le firmware V4 mélangeait ces lignes dans le canal 7. La correction sépare les
+buffers et leurs bits CFG_RDY. Le test actuel utilise RDMA en adresse physique
+directe, sans DMMU, pour isoler cette erreur de topologie. L'image construite
+fait 42581 octets et attend encore son exécution sur la Jupiter 2.
+
+
+### Complément : en-tête du plane RDMA
+
+Le pilote HEE constructeur programme `layer_mode`, `layer_cmpsr_id`,
+`is_offline` et `is_two_layers` avant les registres d'image. La cmdlist V4
+omettait ces deux premiers mots, bien que l'écriture directe de `RDMA0+0x00`
+fût correcte. La liste plane les contient maintenant explicitement :
+
+```text
+RDMA0+0x00 = 0x00002000
+RDMA0+0x04 = 0x00000000
+```
+
+La valeur `0x2000` rattache RDMA0 au compositeur 1 de DPU1
+(`layer_cmpsr_id=1`) avec `layer_mode=0`. La valeur suivante sélectionne le
+chemin en ligne et une seule couche. Cette correction est compilée dans
+l'image TFTP de `42581` octets ; son effet à l'écran reste à mesurer après le
+prochain reset.

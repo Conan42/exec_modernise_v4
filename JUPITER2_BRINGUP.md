@@ -1736,3 +1736,645 @@ La mire bleue est visible sur le HP Compaq LA2006x. Le chemin physique
 Jupiter 2 → DP1 → adaptateur USB-C/HDMI → DVI → écran est validé. Le défaut
 est maintenant localisé au flux de pixels DPU1/TMG/Saturn ; les essais suivants
 pourront désactiver la mire DP sans remettre en cause la liaison physique.
+
+## Prochain essai : Saturn sans mire DP
+
+La mire bleue interne du transmetteur est désormais désactivée dans le source
+(`DP_COLORBAR_TEST=false`). Le binaire préparé dans
+`tftp-root/bonjour-jupiter2.bin` mesure `37069` octets. Il conserve la couche
+solide bleue Saturn, la cmdlist compositeur du canal 7 et le mode
+`1600x900@60` ; il ne lit donc toujours pas le splash BGRA pour cette étape.
+
+Depuis le prompt U-Boot, après avoir vérifié que l'écran est relié et que son
+entrée DVI est sélectionnée :
+
+```text
+setenv ipaddr 192.168.1.132
+setenv serverip 192.168.1.131
+setenv netmask 255.255.255.0
+ping 192.168.1.131
+tftpboot 0x140000000 bonjour-jupiter2.bin
+go 0x140000000
+```
+
+La trace attendue doit contenir `DP1+0x238_COLORBAR_RB=0x00000000`,
+`SATURN_MODE=SOLID_CMDLIST`, `DPU1+0x3E8_RB=0x00000003`,
+`TMG0+0x00_ACTIVE_RB=0x00000181` et `SATURN_SOLID_BLUE_HOLD`. Ce sont les
+valeurs qui permettront de savoir si le bleu observé est produit par Saturn.
+Le résultat visuel doit être noté à côté de cette trace ; `SPLASH_OK` reste
+réservé à l'affichage confirmé du framebuffer BGRA.
+
+## 18 octobre 2026 — exécution Saturn sans mire DP
+
+La séquence a été envoyée directement au prompt U-Boot avec une attente du
+prompt après chaque commande. Le transfert est confirmé par :
+
+```text
+Bytes transferred = 37069 (90cd hex)
+```
+
+Le firmware a démarré et est resté sur `SATURN_SOLID_BLUE_HOLD`. La mire
+interne DP est désactivée et les lectures post-commit confirment la scène
+Saturn active :
+
+```text
+DP1+0x238_COLORBAR_RB=0x00000000
+SATURN_MODE=SOLID_CMDLIST
+DPU1+0x3E8_POST_RB=0x00000003
+CMP1+0x00_POST_RB=0x00000001
+CMP1+0x38_POST_RB=0x0000FF09
+TMG0+0x00_POST_RB=0x00000181
+RDMA0+0xB4_POST_RB=0x00000000
+CMDLIST+0x6F8_STATUS=0x00000000
+SATURN_SOLID_BLUE_HOLD
+```
+
+L'essai précédent avait produit une exception d'instruction parce que
+`go` avait été envoyé avant la fin du transfert TFTP ; U-Boot avait alors
+exécuté les valeurs `0xFF` restées à l'adresse de chargement. Cette erreur de
+séquencement est corrigée. La couleur observée sur le moniteur doit être
+notée avec cette trace avant le retour au splash BGRA.
+
+## 18 octobre 2026 — absence de signal et correctif TMG préparé
+
+Le test Saturn sans mire DP a bien atteint `SATURN_SOLID_BLUE_HOLD` et les
+registres post-commit de `CMP1` sont actifs, mais le moniteur a indiqué « pas
+de signal ». La trace ne montrait aucun événement VSYNC/EOF DPU. Les valeurs
+de contrôle seules ne démontraient donc pas que le générateur de trames
+produisait des lignes.
+
+La comparaison avec le pilote Linux a révélé deux registres manquants dans
+`saturn_init_tmg()` : `TMG0+0x2C` (`EOF_LINE_DELAY`) et `TMG0+0x38`
+(`SOF_PRE_LINE`). Ils sont maintenant initialisés avant le démarrage du
+timing, avec `0xFFFBFFFA` et `0` pour le mode 1600×900@60. Le nouveau binaire
+préparé dans `tftp-root/bonjour-jupiter2.bin` mesure `41205` octets.
+
+Le correctif doit encore être exécuté après un reset physique de la carte.
+
+Le premier lancement a toutefois relevé `TMG0+0x2C_EOF_DELAY_RB=0xFFFFFFFA`.
+La soustraction avait été calculée sur 32 bits ; le firmware masque désormais
+chaque champ sur 16 bits et doit écrire exactement `0xFFFBFFFA`. Le binaire
+reconstruit mesure toujours `41205` octets et doit être relancé après reset.
+
+Le lancement suivant a confirmé la correction :
+
+```text
+Bytes transferred = 41205 (a0f5 hex)
+TMG0+0x2C_EOF_DELAY_RB=0xFFFBFFFA
+TMG0+0x38_SOF_PRE_RB=0x00000000
+DP1+0x238_COLORBAR_RB=0x00000000
+SATURN_MODE=SOLID_CMDLIST
+CMP1+0x38_POST_RB=0x0000FF09
+SATURN_SOLID_BLUE_HOLD
+```
+
+La validation visuelle du moniteur reste à associer à cette trace.
+
+## 18 octobre 2026 — relance automatique non observée
+
+Une relance a été tentée depuis le PC avec une seule session persistante sur
+`/dev/ttyUSB0`, afin d'éviter les resets parasites provoqués par des ouvertures
+répétées du port. La première écoute n'a reçu aucun octet. Une seconde écoute,
+ouverte pendant 90 secondes autour d'un reset physique, n'a reçu que deux
+octets nuls : aucune bannière SPL/U-Boot, aucun `V4_BOOT_HALTED` et aucun
+prompt `=>`. La carte `192.168.1.132` ne répondait pas au ping. Le FT232R est
+bien visible sur le PC ; cette session n'a donc pas permis d'envoyer les
+commandes U-Boot, le TFTP ou le firmware `bonjour`.
+
+## 18 octobre 2026 — correctif TMG exécuté après redémarrage
+
+Après un redémarrage réel, la console a fourni une nouvelle séquence SPL puis
+U-Boot. U-Boot a détecté le HP Compaq LA2006x en `1600x900`, a atteint
+`V4_BOOT_HALTED`, puis a répondu au ping du PC `192.168.1.131`. Le binaire
+`bonjour-jupiter2.bin` a été transféré à `0x140000000` :
+
+```text
+Bytes transferred = 41205 (a0f5 hex)
+```
+
+L'exécution par `go 0x140000000` est arrivée jusqu'à la boucle finale. Les
+marqueurs essentiels sont :
+
+```text
+WDT_DISABLED
+DRAM_OK
+APMU_ENABLE_OK
+TMG0+0x2C_EOF_DELAY_RB=0xFFFBFFFA
+TMG0+0x38_SOF_PRE_RB=0x00000000
+TIMING_STAGE_OK
+RDMA_STAGE_OK
+DMMU_STAGE_OK
+CMDLIST_ENABLE_OK
+SATURN_MODE=SOLID_CMDLIST
+LINK_TRAIN_OK
+DP1+0x238_COLORBAR_RB=0x00000000
+CMP1+0x38_POST_RB=0x0000FF09
+SCANOUT_STAGE_OK
+SATURN_SOLID_BLUE_HOLD
+```
+
+Le watchdog est désactivé, le link training DP réussit et aucune IRQ d'erreur
+RDMA n'est relevée. Cette trace confirme le chemin de contrôle Saturn jusqu'au
+maintien de la scène ; elle ne constitue pas encore une confirmation visuelle
+du moniteur et le splash BGRA n'est pas chargé par ce scénario.
+
+## 18 octobre 2026 — test du fond TMG rouge
+
+Un scénario d'isolement a été exécuté après recompilation avec
+`TMG_BACKGROUND_TEST=true`. La couche Saturn est désactivée par la cmdlist et
+le fond est généré directement par le TMG :
+
+```text
+Bytes transferred = 41205 (a0f5 hex)
+TMG0+0x24_BG_RG_RB=0x00000FFF
+TMG0+0x28_BG_B_RB=0x00000000
+CMP1+0x38_ACTIVE_RB=0x00000000
+LINK_TRAIN_OK
+SCANOUT_STAGE_OK
+TMG_BACKGROUND_RED_HOLD
+```
+
+La trace confirme que le firmware atteint et maintient le scénario TMG sans
+erreur RDMA ni échec du link training. L'observation du moniteur doit encore
+être associée à cette exécution pour séparer un défaut de timing/scanout d'un
+défaut de composition Saturn.
+
+## 18 octobre 2026 — test direct CMP1 noir et retour à la cmdlist
+
+Le test direct a été exécuté avec `SATURN_SOLID_DIRECT_TEST=true`. Cette
+variante désactivait volontairement la cmdlist du compositeur
+(`DPU1+0x3E8=0`) et écrivait `CMP1+0x28..0x34` ainsi que `CMP1+0x38` par MMIO.
+La trace a montré des trames actives :
+
+```text
+SATURN_MODE=SOLID_DIRECT
+DPU1+0x3E8_POST_RB=0x00000000
+TMG0+0x00_ACTIVE_RB=0x00000184
+DPU1+0x758_IRQ_RAW=0x40000133
+SATURN_SOLID_BLUE_HOLD
+```
+
+Le moniteur est toutefois resté noir. La lecture du pilote constructeur K3
+montre que `layer00_solid_color_*`, `layer00_solid_en` et `layer00_en` sont
+normalement écrits dans la cmdlist du compositeur, puis validés par la scène.
+Les valeurs relues après les écritures directes ne prouvaient donc pas que la
+couche était active dans le chemin de pixels.
+
+Le firmware a été corrigé en remettant `SATURN_SOLID_DIRECT_TEST=false`. Le
+nouveau binaire est construit et servi par
+`tftp-root/bonjour-jupiter2.bin` (`41205` octets). Il réactive la cmdlist
+compositeur (`DPU1+0x3E8=0x3`), conserve `TMG0+0x00=0x184` — champ
+`fm_timing_en` documenté par `tmg.h` — et soumet la couche bleue sur le canal 7.
+Il doit être transféré puis lancé après un reset physique de la Jupiter 2.
+
+## Conclusion de la session — 18 octobre 2026
+
+Les éléments suivants sont validés :
+
+- la mire interne bleue du transmetteur DP est visible ;
+- l'adaptateur USB-C/HDMI, la conversion vers DVI et le HP Compaq LA2006x
+  fonctionnent ensemble ;
+- le link training DP sur deux voies réussit ;
+- le mode DMT `1600x900@60` est programmé ;
+- `TMG0+0x00=0x184` active bien `fm_timing_en` ;
+- `DPU1+0x758_IRQ_RAW=0x40000133` confirme l'activité VSYNC/EOF.
+
+Le noir observé avec `SATURN_SOLID_DIRECT_TEST=true` est localisé au chemin
+de composition. Ce mode écrivait les registres CMP1 directement et désactivait
+la cmdlist ; les lectures de retour confirmaient les écritures, mais pas leur
+prise en compte par le pipeline de pixels. Le test ne permet donc pas encore
+de conclure que Saturn produit une image.
+
+Le nouveau binaire revient à `SATURN_SOLID_DIRECT_TEST=false`. Il active la
+cmdlist compositeur du canal 7 (`DPU1+0x3E8=0x3`) et conserve le timing corrigé.
+Il est prêt dans `tftp-root/bonjour-jupiter2.bin` et mesure `41205` octets,
+mais n'a pas encore été exécuté après le dernier reset.
+
+### État à la fin de la session
+
+```text
+VALIDÉ       : DP1, AUX, link training, adaptateur, moniteur, timing, VSYNC/EOF
+À EXÉCUTER   : SATURN_MODE=SOLID_CMDLIST
+À VALIDER    : couleur solide visible produite par CMP1/Saturn
+ENSUITE      : RDMA + DMMU + framebuffer BGRA + splashscreen
+```
+
+Le splashscreen n'est pas encore déclaré fonctionnel. La prochaine session
+doit d'abord obtenir une couleur solide Saturn visible, puis seulement
+réactiver la lecture mémoire du framebuffer.
+
+## 19 octobre 2026 — cmdlist consommée et POSTPIPE ajouté
+
+Le binaire de `41205` octets a été transféré et exécuté. Le résultat visuel
+est resté noir, mais cette trace prouve que la cmdlist du compositeur est
+active et que sa ligne `CFG_READY` a été consommée :
+
+```text
+SATURN_MODE=SOLID_CMDLIST
+DPU1+0x3E8_POST_RB=0x00000003
+DPU1+0x3F4_CFG_READY=0x00000000
+CMDLIST7+0x1F4_DBG_RB=0x00000000
+CMP1+0x38_POST_RB=0x0000FF09
+TMG0+0x00_POST_RB=0x00000184
+DPU1+0x758_IRQ_RAW=0x40000133
+SCANOUT_STAGE_OK
+SATURN_SOLID_BLUE_HOLD
+```
+
+La comparaison détaillée avec `saturn_hee_conf_dpuctrl()` du pilote K3 a
+révélé que le pilote ajoute systématiquement le POSTPIPE au groupe cmdlist du
+compositeur, même lorsque le post-scaler est désactivé. Il écrit
+`POSTPIPE+0x00=0` pour `split_en` et `POSTPIPE+0x34=1600x900` pour les
+dimensions actives. Ces écritures manquaient dans le firmware V4.
+
+Elles ont été ajoutées avant la validation `CFG_READY`, avec les readbacks
+`POSTPIPE+0x00_POST_RB` et `POSTPIPE+0x34_POST_RB`. Le nouveau binaire mesure
+`41245` octets et est prêt dans `tftp-root/bonjour-jupiter2.bin`. Il doit être
+exécuté après reset avant de poursuivre vers RDMA/DMMU et le splash BGRA.
+
+## 19 octobre 2026 — fond TMG rouge confirmé
+
+Le test `TMG_BACKGROUND_TEST=true` a été exécuté avec `CMP_BACKGROUND_TEST=false`
+et la mire DP désactivée. Le moniteur a effectivement affiché un fond rouge.
+La trace UART était cohérente avec cette observation :
+
+```text
+TMG0+0x24_BG_RG_RB=0x00000FFF
+CMP1+0x38_POST_RB=0x00000000
+TMG0+0x00_POST_RB=0x00000184
+DPU1+0x758_IRQ_RAW=0x40000133
+SCANOUT_STAGE_OK
+TMG_BACKGROUND_RED_HOLD
+```
+
+Ce résultat valide le timing TMG, le scanout DPU, le transmetteur DP, la
+liaison USB-C/HDMI/DVI et le moniteur. Il localise le défaut restant dans le
+chemin Saturn/CMP1/POSTPIPE, puisque la couche CMP1 était désactivée pendant
+ce test et le TMG produisait directement les pixels.
+
+Le firmware est maintenant préparé pour le test suivant :
+
+```text
+TMG_BACKGROUND_TEST=false
+CMP_BACKGROUND_TEST=false
+SATURN_SOLID_TEST=true
+SATURN_SOLID_DIRECT_TEST=false
+DP_COLORBAR_TEST=false
+```
+
+Cette configuration soumet la couleur solide bleue par la cmdlist du
+compositeur, avec le POSTPIPE ajouté et `CFG_READY` validé. Le test doit
+permettre de vérifier si CMP1 produit enfin des pixels visibles avant de
+reprendre RDMA, DMMU et le splash BGRA.
+
+## 19 octobre 2026 — exécution du test Saturn après reset
+
+Après reset, U-Boot s'est arrêté normalement sur `V4_BOOT_HALTED`. Le réseau
+et le transfert ont réussi : l'image de `41245` octets a été chargée à
+`0x140000000`, puis lancée avec `go 0x140000000`. La trace du firmware atteint
+la boucle de maintien :
+
+```text
+SATURN_MODE=SOLID_CMDLIST
+SATURN_RDMA_SOURCE=DISABLED
+CMP1+0x30_SOLID_B_RB=0x000003FF
+CMP1+0x34_SOLID_A_RB=0x000000FF
+CMP1+0x38_ACTIVE_RB=0x0000FF09
+DPU1+0x3E8_POST_RB=0x00000003
+DPU1+0x3F4_CFG_READY=0x00000000
+TMG0+0x00_POST_RB=0x00000184
+DPU1+0x758_IRQ_RAW=0x40000133
+SCANOUT_STAGE_OK
+SCANOUT_DIAG_OK
+SATURN_SOLID_BLUE_HOLD
+```
+
+Le link training DP et le scanout sont donc toujours actifs. Le readback du
+POSTPIPE montre toutefois :
+
+```text
+POSTPIPE+0x00_POST_RB=0x00000000
+POSTPIPE+0x34_POST_RB=0x00000000
+```
+
+La valeur nulle au registre de dimensions indique que la ligne cmdlist censée
+écrire `1600x900` n'est pas prise en compte, malgré la consommation de la
+cmdlist CMP1. Le prochain correctif doit se concentrer sur l'encodage ou le
+routage de cette ligne POSTPIPE. Le résultat visuel de ce test doit être
+associé à cette trace avant de reprendre le framebuffer BGRA.
+
+L'analyse du pilote K3 confirme que `m_inwidth` et `m_inheight` sont deux
+champs du même `value32[13]` à `POSTPIPE+0x34`. `cmdlist_regs_packing()` produit
+donc une seule ligne avec le strobe `0xF`. Le firmware utilisait à tort
+`0xFFF`, le strobe d'une ligne de trois registres ; cette erreur explique le
+readback nul et est corrigée dans le prochain binaire.
+
+Le test suivant quitte le scénario de couche solide seule, resté noir malgré
+la consommation de la cmdlist. Le firmware repasse au chemin normal
+`RDMA0 → DMMU → CMP1 → POSTPIPE → TMG` avec `SATURN_SOLID_TEST=false`. U-Boot
+doit charger `splashscreen-1600x900.bgra` à `0x102000000` avant le binaire.
+
+## 19 octobre 2026 — test RDMA en adresse physique directe préparé
+
+Le chemin `RDMA0 → DMMU → CMP1 → POSTPIPE → TMG` a été exécuté après le
+dernier reset. Le firmware a atteint `SCANOUT_DIAG_OK` et le cycle RGB, mais
+le moniteur est resté noir. Les IRQ VSYNC/EOF et le link training DP restent
+actifs ; le défaut est donc dans la production ou la consommation des pixels,
+pas dans l'adaptateur USB-C/HDMI/DVI ni dans le timing `1600x900@60`.
+
+Le prochain binaire isole maintenant le DMMU. La constante
+`RDMA_PHYS_DIRECT_TEST` est active : RDMA0 pointe directement sur
+`0x102000000`, l'adresse basse attendue est `0x02000000`, l'adresse haute est
+`0x1`, et TBU0 est désactivé avec `TBU0+0x00=0`. La cmdlist continue d'activer
+RDMA0, CMP1, POSTPIPE et le même scénario de scène. Les registres RDMA0 et
+TBU0 sont relus après le commit effectif.
+
+Le binaire `tftp-root/bonjour-jupiter2.bin` mesure `42189` octets. Ce test est
+préparé mais doit encore être chargé par U-Boot après un reset. Un affichage
+réussirait à isoler la panne dans la traduction DMMU. Un écran noir avec TBU0
+désactivé localiserait la panne dans CMP1, POSTPIPE ou le routage vers TMG.
+
+La conclusion actuelle reste : chaîne physique validée, chemin Saturn/RDMA
+non validé, splash BGRA non affiché.
+
+## 19 octobre 2026 — RDMA physique exécuté après reset
+
+Le reset a bien relancé U-Boot sur `V4_BOOT_HALTED`. Le splash de
+`5760000` octets et le firmware de `42189` octets ont été transférés par TFTP.
+Le firmware a exécuté le mode `RDMA_PHYS_DIRECT_TEST` jusqu'à
+`RGB_CYCLE_DONE`, avec les valeurs suivantes après commit :
+
+```text
+RDMA0+0x24_POST_RB=0x02000000
+RDMA0+0x28_POST_RB=0x00000001
+RDMA0+0x3C_POST_RB=0x00001900
+RDMA0+0x40_POST_RB=0x03840640
+RDMA0+0x74_POST_RB=0x00000007
+TBU0+0x00_POST_RB=0x00000000
+RDMA0+0xB4_POST_RB=0x00000000
+```
+
+Le framebuffer est donc adressé directement en DRAM, et aucun défaut DMMU ou
+IRQ RDMA n'est signalé. Le POSTPIPE reste toutefois à
+`POSTPIPE+0x34_POST_RB=0x00000000`, alors que la cmdlist CMP1 est consommée.
+La prochaine étape est de tester l'écriture directe du registre de dimensions
+POSTPIPE et son rattachement effectif à CMP1/TMG.
+
+Le binaire suivant, de `42213` octets, est prêt dans `tftp-root`. Il écrit
+directement `POSTPIPE+0x34=0x03840640` après `DPU1+0x350_SW_START` et affiche le
+readback `POSTPIPE+0x34_DIRECT_RB`. Un nouveau reset est nécessaire pour
+l'exécuter.
+
+Le test a été exécuté après reset. L'écriture directe a été acceptée et reste
+active après le commit :
+
+```text
+POSTPIPE+0x34_DIRECT_RB=0x03840640
+POSTPIPE+0x34_POST_RB=0x03840640
+CMDLIST+0x6F8_STATUS=0x00000001
+RDMA0+0xB4_POST_RB=0x00000000
+RGB_CYCLE_DONE
+```
+
+Le registre POSTPIPE fonctionne donc en accès direct. La ligne équivalente de
+la cmdlist n'est pas appliquée ; la confirmation visuelle reste nécessaire
+pour conclure sur le chemin CMP1/TMG.
+
+Le test POSTPIPE direct est resté noir malgré le readback correct
+`POSTPIPE+0x34_POST_RB=0x03840640`. Le prochain diagnostic désactive donc la
+couche RDMA et demande à CMP1 de générer directement un fond rouge
+(`CMP_BACKGROUND_TEST=true`). Le binaire préparé mesure `41453` octets et
+nécessite un nouveau reset.
+
+## 19 octobre 2026 — fond CMP1 noir, test Saturn isolé préparé
+
+Le scénario `CMP_BACKGROUND_TEST=true` a été lancé, mais l'écran est resté
+noir. Ce scénario désactive `layer00` et ne suffit donc pas à valider le
+chemin de pixels Saturn. Le fond TMG rouge et la mire DP interne ont déjà
+validé la chaîne physique, le timing et le scanout.
+
+Le prochain binaire utilise uniquement une couche solide bleue CMP1, soumise
+par la cmdlist constructeur du canal 7 :
+
+```text
+SATURN_SOLID_TEST=true
+SATURN_SOLID_DIRECT_TEST=false
+CMP_BACKGROUND_TEST=false
+TMG_BACKGROUND_TEST=false
+RDMA_PHYS_DIRECT_TEST=false
+POSTPIPE_DIRECT_TEST=false
+DP_COLORBAR_TEST=false
+```
+
+`CMP1+0x34` reçoit `0x000100FF` (`solid_color_a=0xFF` et
+`solid_area_mode=1`, bit 16), tandis que `CMP1+0x38` reste à `0x0000FF09`.
+Le binaire prêt dans `tftp-root/bonjour-jupiter2.bin` mesure `41549` octets.
+Un reset physique est nécessaire avant son chargement ; le firmware courant
+boucle et ne traite aucune commande de redémarrage par l'UART.
+
+## 19 octobre 2026 — Saturn actif, POSTPIPE non appliqué
+
+Le test a été chargé après reset et a atteint `SATURN_SOLID_BLUE_HOLD`, mais
+l'écran est resté noir. La trace confirme la couche et la cmdlist :
+
+```text
+SATURN_MODE=SOLID_CMDLIST
+CMP1+0x34_POST_RB=0x000100FF
+CMP1+0x38_POST_RB=0x0000FF09
+DPU1+0x3E8_POST_RB=0x00000003
+POSTPIPE+0x00_POST_RB=0x00000000
+POSTPIPE+0x34_POST_RB=0x00000000
+DPU1+0x758_IRQ_RAW=0x40000133
+SATURN_SOLID_BLUE_HOLD
+```
+
+La cmdlist CMP1 et le scanout sont actifs. Le registre de dimensions POSTPIPE
+reste toutefois nul, alors que le pilote K3 écrit `1600x900` avant le commit.
+Le nouveau binaire applique directement ces deux valeurs avant `CFG_READY` et
+`SW_START`. Il est prêt dans `tftp-root/bonjour-jupiter2.bin` et mesure
+`41597` octets.
+
+## 19 octobre 2026 — correction de l'en-tête cmdlist en attente d'exécution
+
+La dernière trace Saturn est arrivée jusqu'à `SATURN_SOLID_BLUE_HOLD`, mais le
+moniteur est resté noir. Une vérification de l'encodage HEE a mis en évidence
+une erreur indépendante du POSTPIPE : `CMDLIST_WAIT_EVENT_HIGH` était ajouté
+par erreur au premier mot de l'en-tête, alors que les bits hauts de l'événement
+doivent être écrits dans le second mot. La trace le rend visible :
+
+```text
+CMDLIST_HEADER=0x0100140000000002
+```
+
+Le `0x2` dans les bits bas falsifiait `next_list_addr`. Le pilote constructeur
+définit cet en-tête sur deux mots : le premier porte `next_list_addr`,
+`nod_len`, `nod_type` et `wait_event_low`, tandis que le second porte
+`wait_event >> 5`. Le firmware V4 suit maintenant cette séparation.
+
+La nouvelle image a été recompilée et placée dans
+`tftp-root/bonjour-jupiter2.bin` (`41597` octets). La carte exécute encore
+l'ancienne image et boucle dans `SATURN_SOLID_BLUE_HOLD`; elle ne peut donc pas
+recevoir une commande de redémarrage par l'UART. Un reset physique est requis
+avant le prochain chargement TFTP.
+
+
+## Conclusion opérationnelle — 19 octobre 2026
+
+Le test de l'image corrigée a encore laissé l'écran noir. Les resets et les
+variantes de mire ont maintenant fourni assez d'éléments pour arrêter les
+essais répétitifs.
+
+La sortie vidéo physique est validée : Bianbu affiche, la mire DP interne est
+visible, le fond TMG rouge est visible, et le mode 1600×900 à 60 Hz est accepté
+avec l'adaptateur USB-C/HDMI/DVI et le HP Compaq LA2006x. L'UART, la DRAM, les
+horloges, HPD, AUX et le link training DP sont également validés.
+
+Le défaut se situe dans le chemin de pixels Saturn/CMP1 vers le TMG. Il reste
+présent avec une couche solide sans RDMA, avec RDMA en adresse physique directe
+et avec une écriture directe du POSTPIPE. Les readbacks et la consommation de
+la cmdlist ne suffisent donc pas à prouver qu'une scène active est routée vers
+la sortie.
+
+La suite doit comparer l'état des registres après l'initialisation Linux
+Bianbu avec l'état bare-metal, en donnant la priorité au commit de scène, au
+routage CMP1/POSTPIPE, au groupe cmdlist sélectionné et aux registres TMG. Le
+framebuffer BGRA, la DMMU et le splash sont suspendus jusqu'à la validation de
+ce chemin. SPLASH_OK n'a pas été émis.
+
+
+## Séparation des cmdlists selon le pilote constructeur — 19 octobre 2026
+
+L'analyse directe de spacemit-com/linux-6.18, branche k3-br-v1.0.y, a montré
+que les registres ne sont pas soumis dans une seule cmdlist. Le pilote place
+les réglages de plane et de couche dans le groupe du RDMA associé, puis place
+le POSTPIPE et le CFG_RDY du compositeur dans le groupe CRTC du canal 7.
+
+Le firmware V4 a été corrigé en conséquence :
+
+- cmdlist plane à 0x101100000, canal RDMA0 ;
+- cmdlist CRTC à 0x101110000, canal compositeur 7 ;
+- ligne START_CMPS_Y pour RDMA0 dans la liste plane ;
+- CFG_RDY RDMA0 dans la liste plane ;
+- POSTPIPE et CFG_RDY CMP1 dans la liste CRTC.
+
+Le scénario de validation courant utilise RDMA en adresse physique directe et
+désactive le test de couleur solide. La compilation et la génération TFTP
+passent ; l'image courante mesure 42581 octets. Le résultat visuel reste à
+obtenir après reset.
+
+
+## Correction RDMA appliquée — 19 octobre 2026
+
+La liste plane a été complétée selon `saturn_hee_plane_update_hw_channel()`
+du pilote constructeur. Elle commence désormais par deux lignes obligatoires :
+
+```text
+RDMA0+0x00 = 0x00002000  # layer_mode=0, layer_cmpsr_id=1 (CMP1)
+RDMA0+0x04 = 0x00000000  # online, une seule couche
+```
+
+Elles précèdent l'adresse physique `0x102000000`, le stride `6400`, la
+taille `1600x900`, le format Saturn `7`, puis les lignes TBU et compositeur.
+Cette omission expliquait qu'un readback direct puisse être correct alors que
+la cmdlist réappliquait une configuration RDMA incomplète.
+
+La nouvelle image `tftp-root/bonjour-jupiter2.bin` fait `42581` octets et le
+serveur TFTP du PC la sert déjà. La compilation et la vérification de diff sont
+validées. Un seul reset et chargement restent nécessaires pour vérifier si le
+plane RDMA est enfin routé vers CMP1 ; aucune validation visuelle n'est encore
+déclarée.
+
+## 19 octobre 2026 — test des lignes RDMA corrigées
+
+Après reset, U-Boot a chargé correctement le framebuffer 1600x900 :
+
+```text
+Bytes transferred = 5760000 (57e400 hex)
+```
+
+Le binaire `bonjour-jupiter2.bin` de 42581 octets a ensuite été chargé et
+exécuté. La trace UART a confirmé la fin du chemin de scanout et le cycle de
+couleurs :
+
+```text
+SCANOUT_DIAG_OK
+RGB_CYCLE_BEGIN
+RDMA_MODE=PHYSICAL_DIRECT
+RGB_CYCLE_BLUE
+RGB_CYCLE_RED
+RGB_CYCLE_GREEN
+RGB_CYCLE_DONE
+MMIO_PROBE_OK
+```
+
+L'écran est resté noir. La correction de l'en-tête RDMA est donc exécutée mais
+ne suffit pas à produire une image visible. Le lien physique reste validé par
+les essais précédents ; le défaut restant est dans le commit ou le routage de
+la scène Saturn/CMP1 vers le TMG. Aucun nouveau cycle de reset ou de couleurs
+ne doit être lancé avant comparaison de l'état des registres avec une session
+Linux Bianbu.
+## 19 octobre 2026 — routage correct des listes HEE
+
+La session Linux Bianbu de référence confirme le chemin matériel : DPU1 est
+actif, DP1 négocie en RBR à 1,62 Gb/s sur 2 voies et le mode sélectionné est
+1600x900 à 60 Hz. Le plane DRM actif est `AR24` en 1600x900, avec un pitch de
+6400 octets.
+
+La comparaison avec `saturn_hee_plane_update_hw_channel()` a permis de
+corriger une erreur de topologie dans le firmware. Linux construit la liste
+RDMA/TBU avec `plane_to_cl(plane)`, donc sur le canal 0 pour RDMA0. Il construit
+les registres de CMP1 avec `crtc_to_cl(crtc)`, puis ajoute le POSTPIPE dans la
+même liste CRTC. `wb_cmdlist()` programme cette liste de composition sur le
+canal 7 pour DPU1/CRTC1.
+
+Le firmware plaçait les lignes CMP1 dans la liste du canal 0 et ne plaçait sur
+le canal 7 que POSTPIPE et CFG_RDY. Cette configuration pouvait produire des
+readbacks plausibles sans engager le compositeur au bon événement de reload,
+ce qui explique l'écran noir malgré le lien DP validé. Le firmware courant
+sépare maintenant les deux listes :
+
+```text
+canal 0 : RDMA0 + TBU0 + START_CMPS_Y + CFG_RDY RDMA0
+canal 7 : CMP1 layer 0 + POSTPIPE + CFG_RDY CMP1
+```
+
+Le mode solide suit la même règle et place toutes ses lignes CMP1 sur le
+canal 7. La vérification locale du premier essai a ensuite été corrigée : elle
+lisait une dernière ligne CRTC à un index fixe de 15 et capturait l'état CMP1
+avant son remplissage. L'image reconstruite est prête dans
+`tftp-root/bonjour-jupiter2.bin`.
+
+Lors du prochain essai, attendre le prompt `=>` après chaque commande réseau :
+
+```text
+setenv ipaddr 192.168.1.132
+setenv serverip 192.168.1.131
+ping 192.168.1.131
+tftpboot 0x102000000 splashscreen-1600x900.bgra
+tftpboot 0x140000000 bonjour-jupiter2.bin
+go 0x140000000
+```
+
+Le firmware précédent tourne encore tant qu'un reset physique n'a pas été
+effectué.
+
+## 19 octobre 2026 — nouveau reset et transfert interrompu
+
+Le reset physique a été effectué avec le moniteur HP Compaq LA2006x relié
+directement à la Jupiter 2. U-Boot a de nouveau détecté le mode `1600x900` et
+a atteint le prompt `=>` après `V4_BOOT_HALTED`. La liaison réseau a été
+reconfigurée avec `192.168.1.132` pour la Jupiter et `192.168.1.131` pour le
+PC Ryzen 5 ; le ping vers le PC a réussi.
+
+Le transfert du framebuffer a ensuite été préparé en 88 fragments de 64 KiB,
+chargés à partir de `0x102000000`, afin d'éviter les pertes d'ACK observées
+avec un unique fichier TFTP de 5760000 octets. La session a été arrêtée avant
+la fin de ce transfert et avant `tftpboot` du firmware ou `go
+0x140000000`. Aucun nouveau résultat vidéo ne peut donc être déduit de cet
+essai.
+
+L'image prête pour le prochain essai est `tftp-root/bonjour-jupiter2.bin`,
+46 701 octets. Elle contient le routage corrigé des cmdlists HEE : RDMA0 sur
+le canal 0 et CMP1/POSTPIPE sur le canal 7, avec le test RDMA en adresse
+physique directe. Les vérifications locales restent passantes : formatage,
+`cargo test --workspace` (142 tests), build bare-metal et `git diff --check`.
